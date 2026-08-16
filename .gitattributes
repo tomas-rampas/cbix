@@ -1,2 +1,39 @@
+# Line-ending normalisation for CBIX.
+# CI (S01-03) will run on Linux while development happens on Windows, so endings
+# must be deterministic in the index AND in the working tree.
+
+# Default: let Git detect text files and store them LF-normalised in the repo.
 * text=auto
+
+# Scripts whose interpreter cares about the ending, pinned on checkout too.
+*.sh   text eol=lf
+*.bash text eol=lf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+
+# Feature files and C# sources are pinned to LF ON CHECKOUT, not just in the index.
+# Reason: CBIX asserts on verbatim document snippets. A Gherkin DocString or a C#
+# raw string literal holding an expected snippet would otherwise arrive as \r\n on a
+# Windows checkout and \n on Linux, so the same test would pass on one and fail on
+# the other. The grounding gate compares snippets by exact string containment, which
+# makes this a correctness issue, not a cosmetic one.
+*.feature text eol=lf
+*.cs      text eol=lf diff=csharp
+
+# Other source and config: text, LF in the index (checkout stays native).
+*.csproj   text
+*.sln      text eol=crlf
+*.props    text
+*.targets  text
+*.config   text
+*.json     text
+*.md       text
+*.yml      text
+*.yaml     text
+
+# Binary assets - never normalise, never diff as text.
 *.pdf binary
+*.png binary
+*.jpg binary
+*.dll binary

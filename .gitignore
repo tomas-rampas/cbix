@@ -135,6 +135,15 @@ id_dsa
 id_ecdsa
 id_ed25519
 
+# Reqnroll generated code-behind. Cbix.Bdd sets
+# ReqnrollUseIntermediateOutputPathForCodeBehind=true so these land in obj/, but keep
+# the pattern as a safety net: a project that forgets the property would otherwise
+# offer generated build output for commit.
+# Corollary: never hand-author a file matching *.feature.cs. With that property on,
+# Reqnroll's CleanFeatureFilesInProject target deletes **/*.feature.cs on clean, so
+# such a file would be both invisible to git and silently destroyed by `dotnet clean`.
+*.feature.cs
+
 # NuGet lock files ARE tracked on purpose (RestorePackagesWithLockFile=true in
 # Directory.Build.props). Do not add packages.lock.json to this file.
 

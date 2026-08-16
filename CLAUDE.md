@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**In implementation (Sprint 01).** The .NET solution is scaffolded: `Cbix.sln` at the repo root with `src/Cbix.Core` (contracts/executors — empty until S01-04), `src/Cbix.Worker` (worker host), `tests/Cbix.UnitTests` (xUnit) and `tests/Cbix.Bdd` (plain xUnit until Reqnroll is wired in S01-02). SDK pinned via `global.json` (10.0.110, rollForward patch). Shared build properties (net10.0, nullable, `TreatWarningsAsErrors`, `AnalysisModeSecurity=All`) live only in `Directory.Build.props`; package versions are centralised in `Directory.Packages.props` (CPM) with per-project `packages.lock.json` committed, and restore is locked to nuget.org via `nuget.config`.
+**In implementation (Sprint 01).** The .NET solution is scaffolded: `Cbix.sln` at the repo root with `src/Cbix.Core` (contracts/executors — empty until S01-04), `src/Cbix.Worker` (worker host), `tests/Cbix.UnitTests` (xUnit) and `tests/Cbix.Bdd` (Reqnroll 3.3.4 on xUnit v2 — `.feature` files in `Features/`, step bindings in `Steps/`, config in `reqnroll.json`; undefined steps hard-fail). SDK pinned via `global.json` (10.0.110, rollForward patch). Shared build properties (net10.0, nullable, `TreatWarningsAsErrors`, `AnalysisModeSecurity=All`) live only in `Directory.Build.props`; package versions are centralised in `Directory.Packages.props` (CPM) with per-project `packages.lock.json` committed, and restore is locked to nuget.org via `nuget.config`.
 
 Commands (run from the repo root):
 
@@ -61,3 +61,5 @@ Published tables (T-SQL sketch in design doc §6): `country_documents` (PK `doc_
 - Provider capability drift: matrix extraction quality is provider-dependent — the eval harness reports metrics per provider profile, and a profile swap requires a green regression run.
 - Don't trust model-reported confidence at face value — thresholds are calibrated against observed correction rates.
 - No cell bounding boxes from PDF mode: provenance is page + verbatim snippet, and the review UI locates sources by snippet text-match.
+- Reqnroll's default telemetry egresses to Azure App Insights (violates the no-Azure constraint). It is disabled via `REQNROLL_TELEMETRY_ENABLED=0`: the checked-in `.runsettings` covers `dotnet test`, CI sets it job-wide, and developers should set it machine-wide to cover local `dotnet build` (the MSBuild code-gen task also transmits).
+- The test stack is pinned to xUnit **v2** because `Reqnroll.xUnit` requires `xunit.core 2.x`. Moving to xunit v3 means switching to `Reqnroll.xunit.v3` — never bump the xunit pin in isolation.

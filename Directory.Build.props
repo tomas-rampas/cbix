@@ -15,4 +15,16 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
+  <!--
+    Apply the repo-root .runsettings to every test project so a plain `dotnet test`
+    gets it with no settings flag on the command line. Its main job is disabling Azure
+    Application Insights telemetry (no-Azure hard constraint); see the comment in
+    .runsettings for why this covers the TEST-RUN path only, and why build-time
+    telemetry additionally needs a real environment variable from CI (S01-03) and
+    from developer setup.
+  -->
+  <PropertyGroup>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory).runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+
 </Project>

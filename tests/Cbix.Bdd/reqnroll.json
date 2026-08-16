@@ -1,0 +1,7 @@
+{
+  "$schema": "https://schemas.reqnroll.net/reqnroll-config-3.2.json",
+  "runtime": {
+    "missingOrPendingStepsOutcome": "Error",
+    "stopAtFirstError": true
+  }
+}

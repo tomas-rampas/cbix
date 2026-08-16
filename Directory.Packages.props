@@ -21,4 +21,11 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
 
+  <ItemGroup Label="BDD">
+    <!-- Reqnroll.xUnit is the single entry point: it pulls in Reqnroll and
+         Reqnroll.Tools.MsBuild.Generation (the .feature -> .feature.cs generator).
+         3.3.4 depends on xunit.core 2.8.1, satisfied by our xunit 2.9.3. -->
+    <PackageVersion Include="Reqnroll.xUnit" Version="3.3.4" />
+  </ItemGroup>
+
 </Project>

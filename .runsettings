@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+
+  <!--
+    Test-run settings for CBIX. Wired in automatically via RunSettingsFilePath in
+    Directory.Build.props, so `dotnet test` picks this up with no settings flag on
+    the command line.
+
+    REQNROLL_TELEMETRY_ENABLED=0 disables Reqnroll's telemetry, which posts to Azure
+    Application Insights (endpoint dc.services.visualstudio.com/v2/track, string
+    verified inside Reqnroll.dll). The repo has a hard no-Azure constraint, so that
+    egress is not acceptable. Telemetry is opt-OUT: leaving the variable unset means
+    it is ON.
+
+    COVERAGE IS PARTIAL, DELIBERATELY SO. Record of the split:
+      * TEST-RUN telemetry (Reqnroll runtime, inside the test host process) is
+        covered here.
+      * BUILD-TIME telemetry (Reqnroll.Tools.MsBuild.Generation, inside the MSBuild
+        process) is NOT covered here. A .runsettings file only reaches the test host;
+        it cannot influence an MSBuild process. Build-time egress can be stopped only
+        by a real environment variable set before the build runs, which means:
+          + CI exports REQNROLL_TELEMETRY_ENABLED=0 at job level (story S01-03);
+          + developer machines set it as a user or system environment variable
+            (developer setup documentation).
+        Until both are in place, `dotnet build` on an unconfigured machine still
+        emits telemetry.
+  -->
+  <RunConfiguration>
+    <EnvironmentVariables>
+      <REQNROLL_TELEMETRY_ENABLED>0</REQNROLL_TELEMETRY_ENABLED>
+    </EnvironmentVariables>
+  </RunConfiguration>
+
+</RunSettings>

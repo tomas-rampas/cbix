@@ -38,7 +38,7 @@ Done means:
 
 ---
 
-### [ ] S01-02 — Reqnroll + xUnit wired and runs a real Gherkin scenario
+### [x] S01-02 — Reqnroll + xUnit wired and runs a real Gherkin scenario
 
 As a developer
 I want Reqnroll bound to xUnit in `Cbix.Bdd`
