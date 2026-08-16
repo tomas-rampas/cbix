@@ -405,6 +405,14 @@ public sealed class SecretSourcingSteps(SecretSourcingState state)
             RecurseSubdirectories = true,
             IgnoreInaccessible = true,
             MatchCasing = MatchCasing.CaseInsensitive,
+
+            // DO NOT REMOVE. The default is Hidden | System, and on Unix .NET reports every
+            // dot-prefixed name as FileAttributes.Hidden - so the default silently skips '.env',
+            // '.env.production' and any future dotfile pattern on Linux while finding them on
+            // Windows. That is a scan with a platform-shaped blind spot in exactly the files most
+            // likely to hold a credential. Caught by the per-pattern discovery control below, which
+            // went red on the Linux CI runner and green locally.
+            AttributesToSkip = FileAttributes.None,
         };
 
         return AssetPatterns

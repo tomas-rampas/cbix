@@ -385,6 +385,15 @@ public sealed class ProviderContainmentTests
             RecurseSubdirectories = true,
             IgnoreInaccessible = true,
             MatchCasing = MatchCasing.CaseInsensitive,
+
+            // DO NOT REMOVE, even though no pattern above starts with a dot today. The default is
+            // Hidden | System, and on Unix .NET reports every dot-prefixed name as
+            // FileAttributes.Hidden - so a dotfile pattern added later would silently match nothing
+            // on the Linux CI runner while working on Windows. The sibling scan in Cbix.Bdd's
+            // SecretSourcingSteps already carries '.env' patterns and was measured hitting exactly
+            // that; the two scans are kept in step, so this one carries the same setting rather than
+            // waiting to rediscover the same defect.
+            AttributesToSkip = FileAttributes.None,
         };
 
         return ConfigurationAssetPatterns
