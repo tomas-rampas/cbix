@@ -18,6 +18,13 @@
          AIContent.RawRepresentation, never in a Core signature. -->
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <!-- Logging abstractions only - ILogger/ILogger<T>, no sink, no provider. Cbix.Core needs it
+         because a security refusal that is only an exception is invisible until something catches
+         it: the ingest containment gate has to emit a structured event at the moment it refuses.
+         Neutral by construction (it names no model provider), which is why adding it to
+         CoreAssemblyNeutralityTests' allowlist is a deliberate, commented act rather than a
+         loophole. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup Label="Test">
@@ -25,6 +32,12 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <!-- Runtime-conditional skips. xUnit v2 cannot skip from inside a test, so a probe whose
+         precondition the host denies (creating a symbolic link needs a Windows privilege) would
+         otherwise have to `return` silently and report itself as passed - a security probe that
+         lies. Pinned to the version Reqnroll.xUnit already resolves transitively, so the graph
+         gains no new resolution. -->
+    <PackageVersion Include="Xunit.SkippableFact" Version="1.4.13" />
   </ItemGroup>
 
   <ItemGroup Label="BDD">

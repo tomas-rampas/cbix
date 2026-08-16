@@ -25,6 +25,18 @@ public sealed class CoreAssemblyNeutralityTests
     private static readonly string[] AllowedReferences =
     [
         "Microsoft.Extensions.AI.Abstractions",
+
+        // Added deliberately for story S01-10, following the procedure this list exists to enforce:
+        // the ingest containment boundary must emit a structured security event at the moment it
+        // refuses a submission, because a refusal that is only an exception is invisible until
+        // something happens to catch it - and the deployment control it monitors (the ingest share
+        // being write-restricted, design doc Sprint 01 addendum) has no other instrument.
+        // Justification against the rule above: this is the abstractions package - ILogger and
+        // ILogger<T>, no sink, no provider, no transport - and it names no model provider, so it
+        // cannot make Core depend on one. A logging *implementation* would still not belong here;
+        // the host chooses sinks.
+        "Microsoft.Extensions.Logging.Abstractions",
+
         "netstandard",
         "mscorlib",
     ];

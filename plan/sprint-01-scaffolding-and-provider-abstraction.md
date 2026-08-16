@@ -64,7 +64,7 @@ Done means:
 
 ---
 
-### [ ] S01-03 — CI skeleton runs build and full test suite on every push
+### [x] S01-03 — CI skeleton runs build and full test suite on every push
 
 As a developer
 I want a CI pipeline that builds the solution and runs all tests on every push
@@ -244,7 +244,7 @@ Done means:
 
 ---
 
-### [ ] S01-10 — Ingest executor: content hash and dedupe registry
+### [x] S01-10 — Ingest executor: content hash and dedupe registry
 
 As the pipeline
 I want the ingest executor to compute a content hash for every incoming document and record it in a registry table
@@ -268,7 +268,9 @@ Feature: Ingest content hash and dedupe
     And an audit log entry records the duplicate (design §9 "Duplicate submission" row)
 ```
 
-Done means: registry table matches `document_registry` per design §6's operational-tables list.
+Done means:
+- Registry table matches `document_registry` per design §6's operational-tables list.
+- **Containment (trust boundary):** the ingest layer owns the path-containment check that `DocumentReference`'s contract delegates to it. Two-phase: the submitted location is normalised and prefix-checked against the configured ingest root (trailing separator; platform-aware casing — case-insensitive on Windows/macOS, ordinal on Linux) *before any filesystem call*, then every path component is link-resolved and the prefix re-checked, and the opened file is refused if its link count exceeds one. Escapes via `..`, absolute paths outside the root, symlinks, directory junctions, and hard links are rejected as distinct, test-asserted outcomes; UNC/device-prefixed paths and roots are rejected outright before any network I/O; every refusal emits a structured security log event at the point of detection (paths as structured fields, never interpolated into messages).
 
 ---
 

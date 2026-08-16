@@ -10,6 +10,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Only the unit-test project needs runtime-conditional skips: its containment probes create
+         symbolic and hard links, which some hosts refuse on privilege grounds. Cbix.Bdd already
+         resolves this package transitively through Reqnroll.xUnit. -->
+    <PackageReference Include="Xunit.SkippableFact" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Cbix.Core\Cbix.Core.csproj" />
   </ItemGroup>
 
