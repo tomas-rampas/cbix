@@ -17,7 +17,7 @@ Governing principle: **agents propose, code disposes.** LLM agents never touch t
 
 ## Status
 
-Design phase. Draft v0.2 under architecture review; no source code yet. See the [solution design document](docs/Cross_Border_Instruction_Extraction_Solution_Design.md) for detailed architecture, data model, technology decisions, and delivery phases.
+Design phase. Draft v0.3 under architecture review; no source code yet. See the [solution design document](docs/Cross_Border_Instruction_Extraction_Solution_Design.md) for detailed architecture, data model, technology decisions, and delivery phases.
 
 ## Repository layout
 
