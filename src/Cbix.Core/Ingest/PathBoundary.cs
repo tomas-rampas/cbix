@@ -12,8 +12,8 @@ namespace Cbix.Core.Ingest;
 internal static class PathBoundary
 {
     /// <summary>
-    /// Reports whether a path begins with two directory separators, which on Windows means a UNC
-    /// share (<c>\\server\share</c>) or a device namespace path (<c>\\?\</c>, <c>\\.\</c>).
+    /// Reports whether a path begins with two slashes of either kind - the shape of a UNC share
+    /// (<c>\\server\share</c>) or a device-namespace path (<c>\\?\</c>, <c>\\.\</c>).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -30,13 +30,24 @@ internal static class PathBoundary
     /// that no amount of prefix comparison judges correctly.
     /// </para>
     /// <para>
-    /// Both separator characters are accepted as the leading pair because Windows treats
-    /// <c>//server/share</c> exactly as it treats <c>\\server\share</c>. On Unix a leading <c>//</c>
-    /// is implementation-defined and normalises to <c>/</c>, so refusing it costs nothing real.
+    /// <b>The two characters are literals, deliberately - not <see cref="Path.DirectorySeparatorChar"/>
+    /// and <see cref="Path.AltDirectorySeparatorChar"/>.</b> On Linux both of those are <c>/</c>, so a
+    /// platform-aware predicate simply does not see a backslash: <c>\\attacker.example\share\x.pdf</c>
+    /// stopped being a UNC path and became an ordinary relative filename, fell through to normal
+    /// resolution, and the refusal never fired. That is not a portability nicety - it silently
+    /// disabled a security control on the platform the service actually deploys to, and the tests
+    /// that were meant to prove the control passed on Windows while failing on Linux CI.
+    /// </para>
+    /// <para>
+    /// Neither shape is ever a legitimate document submission in this system on any operating system.
+    /// On Windows they are SMB and device vectors; on Linux a filename beginning with two backslashes
+    /// is pathological input that no ingest share produces. So the rule is uniform and fails closed
+    /// everywhere - and being platform-independent is exactly what makes the refusal testable
+    /// everywhere, with the same inputs producing the same reason on every host.
     /// </para>
     /// </remarks>
     public static bool HasUncOrDevicePrefix(string path) =>
-        path.Length >= 2 && IsSeparator(path[0]) && IsSeparator(path[1]);
+        path.Length >= 2 && IsSlash(path[0]) && IsSlash(path[1]);
 
     /// <summary>
     /// Gets the string comparison that matches the host file system's own idea of path equality.
@@ -119,6 +130,16 @@ internal static class PathBoundary
         });
     }
 
-    private static bool IsSeparator(char character) =>
-        character == Path.DirectorySeparatorChar || character == Path.AltDirectorySeparatorChar;
+    /// <summary>
+    /// Reports whether a character is a slash of either kind, judged as a character rather than as
+    /// "whatever this platform calls a separator".
+    /// </summary>
+    /// <remarks>
+    /// Used only by <see cref="HasUncOrDevicePrefix"/>, and deliberately not by
+    /// <see cref="ContainmentPrefix"/>: the containment prefix must be built from the host's real
+    /// separator, because it is compared against paths the host itself produced. The two concepts
+    /// look alike and are not the same, which is precisely how one platform-aware helper serving both
+    /// turned into a disabled control.
+    /// </remarks>
+    private static bool IsSlash(char character) => character is '\\' or '/';
 }
