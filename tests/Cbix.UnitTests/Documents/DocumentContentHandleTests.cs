@@ -12,6 +12,9 @@ namespace Cbix.UnitTests.Documents;
 /// </summary>
 public sealed class DocumentContentHandleTests
 {
+    private static readonly Uri SpecimenLocation =
+        new("file:///data/Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf");
+
     [Fact]
     public void SystemTextJson_RoundTrip_PreservesEveryField()
     {
@@ -62,6 +65,73 @@ public sealed class DocumentContentHandleTests
         // implementation understands the token.
         ArgumentException error = Assert.Throws<ArgumentException>(
             () => new DocumentContentHandle("sha256:abc", profileName));
+
+        Assert.Equal("profileName", error.ParamName);
+    }
+
+    [Fact]
+    public void IsRedeemableBy_SameDocumentAndIssuingProfile_IsRedeemable()
+    {
+        DocumentReference document = new("sha256:abc", SpecimenLocation, "DE.pdf");
+        DocumentContentHandle handle = new("sha256:abc", "claude-native-pdf", "file_0123");
+
+        Assert.True(handle.IsRedeemableBy(document, "claude-native-pdf"));
+    }
+
+    [Fact]
+    public void IsRedeemableBy_DifferentProfile_IsNotRedeemableButDoesNotThrow()
+    {
+        // The expected state after a provider swap: the token means nothing to this profile, so the
+        // caller re-prepares and issues a new handle. An operational case, not an error.
+        DocumentReference document = new("sha256:abc", SpecimenLocation, "DE.pdf");
+        DocumentContentHandle handle = new("sha256:abc", "claude-native-pdf", "file_0123");
+
+        Assert.False(handle.IsRedeemableBy(document, "generic-vision"));
+    }
+
+    [Fact]
+    public void IsRedeemableBy_DifferentDocument_Throws()
+    {
+        // Never recoverable: redeeming this would prepare one document's content under another
+        // document's identity - cache poisoning plus mis-attributed provenance.
+        DocumentReference otherDocument = new("sha256:def", SpecimenLocation, "CH.pdf");
+        DocumentContentHandle handle = new("sha256:abc", "claude-native-pdf", "file_0123");
+
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => handle.IsRedeemableBy(otherDocument, "claude-native-pdf"));
+
+        Assert.Equal("document", error.ParamName);
+    }
+
+    [Fact]
+    public void IsRedeemableBy_DifferentDocumentAndDifferentProfile_ThrowsRatherThanReportingNotRedeemable()
+    {
+        // Order matters: the document check must win, otherwise the unrecoverable case hides behind
+        // the recoverable one and the caller silently re-prepares the wrong document.
+        DocumentReference otherDocument = new("sha256:def", SpecimenLocation, "CH.pdf");
+        DocumentContentHandle handle = new("sha256:abc", "claude-native-pdf", "file_0123");
+
+        Assert.Throws<ArgumentException>(() => handle.IsRedeemableBy(otherDocument, "generic-vision"));
+    }
+
+    [Fact]
+    public void IsRedeemableBy_NullDocument_Throws()
+    {
+        DocumentContentHandle handle = new("sha256:abc", "text-only");
+
+        Assert.Throws<ArgumentNullException>(() => handle.IsRedeemableBy(null!, "text-only"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsRedeemableBy_BlankProfileName_Throws(string profileName)
+    {
+        DocumentReference document = new("sha256:abc", SpecimenLocation, "DE.pdf");
+        DocumentContentHandle handle = new("sha256:abc", "text-only");
+
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => handle.IsRedeemableBy(document, profileName));
 
         Assert.Equal("profileName", error.ParamName);
     }

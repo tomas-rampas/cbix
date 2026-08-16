@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 using Microsoft.Extensions.AI;
 
 namespace Cbix.Core.Documents;
@@ -85,12 +87,22 @@ public sealed class DocumentContent
                 nameof(handle));
         }
 
-        Content = copy;
+        // Wrapped, not just copied. An AIContent[] handed out as IReadOnlyList<AIContent> can be
+        // cast straight back to an array and written through, which matters here because one
+        // prepared document is shared by the seven-way parallel section fan-out.
+        Content = new ReadOnlyCollection<AIContent>(copy);
         Capabilities = capabilities;
         Handle = handle;
     }
 
-    /// <summary>Gets the content blocks to attach to an agent's chat call, in presentation order.</summary>
+    /// <summary>
+    /// Gets the content blocks to attach to an agent's chat call, in presentation order.
+    /// <para>
+    /// The collection is a read-only view over a private copy, but the blocks in it are mutable and
+    /// are shared across the concurrent section-agent fan-out: read them, never write to them. See
+    /// <see cref="IDocumentContentProvider.PrepareAsync"/> for the sharing contract.
+    /// </para>
+    /// </summary>
     public IReadOnlyList<AIContent> Content { get; }
 
     /// <summary>Gets the description of how faithfully <see cref="Content"/> represents the document.</summary>

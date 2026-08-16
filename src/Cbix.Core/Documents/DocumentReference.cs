@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Mime;
 
 namespace Cbix.Core.Documents;
@@ -34,6 +35,27 @@ namespace Cbix.Core.Documents;
 /// </remarks>
 public sealed record DocumentReference
 {
+    /// <summary>
+    /// Upper bound on <see cref="DocumentId"/>. A content-hash identity is far shorter (a SHA-256
+    /// hex digest with an algorithm prefix is 71 characters); the cap exists because this value
+    /// reaches log lines, upload metadata and database columns, where an unbounded string supplied
+    /// upstream is a log-flooding and truncation hazard rather than a useful identity.
+    /// </summary>
+    private const int MaxDocumentIdLength = 256;
+
+    /// <summary>
+    /// Upper bound on <see cref="FileName"/>, matching the single-path-component limit common to
+    /// NTFS and ext4 and comfortably inside what a provider's upload metadata accepts.
+    /// </summary>
+    private const int MaxFileNameLength = 255;
+
+    /// <summary>
+    /// Upper bound on <see cref="MediaType"/>. RFC 6838 caps type and subtype names at 127 each;
+    /// the remainder leaves room for legitimate parameters without admitting an unbounded header
+    /// value.
+    /// </summary>
+    private const int MaxMediaTypeLength = 255;
+
     /// <summary>Windows device names that are still special when used as a file name, with or without an extension.</summary>
     private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -66,9 +88,10 @@ public sealed record DocumentReference
     /// <param name="mediaType">IANA media type of the document bytes. Defaults to <c>application/pdf</c>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="location"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// Any argument is empty or white space; <paramref name="location"/> is relative, is not a
-    /// <c>file://</c> URI, or is a UNC path; <paramref name="fileName"/> is not a bare file name;
-    /// or <paramref name="mediaType"/> is not a well-formed media type.
+    /// Any argument is empty, white space, or longer than its documented cap;
+    /// <paramref name="location"/> is relative, is not a <c>file://</c> URI, or is a UNC path;
+    /// <paramref name="fileName"/> is not a bare file name; or <paramref name="mediaType"/> is not a
+    /// well-formed media type.
     /// </exception>
     public DocumentReference(string documentId, Uri location, string fileName, string mediaType = "application/pdf")
     {
@@ -76,6 +99,10 @@ public sealed record DocumentReference
         ArgumentNullException.ThrowIfNull(location);
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
+
+        ValidateLength(documentId, MaxDocumentIdLength, nameof(documentId));
+        ValidateLength(fileName, MaxFileNameLength, nameof(fileName));
+        ValidateLength(mediaType, MaxMediaTypeLength, nameof(mediaType));
 
         ValidateLocation(location);
         ValidateFileName(fileName);
@@ -101,6 +128,19 @@ public sealed record DocumentReference
 
     /// <summary>Gets the IANA media type of the document bytes.</summary>
     public string MediaType { get; }
+
+    /// <summary>Bounds a field that will be written to logs, upload metadata and database columns.</summary>
+    private static void ValidateLength(string value, int maximumLength, string parameterName)
+    {
+        if (value.Length > maximumLength)
+        {
+            throw new ArgumentException(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"The value is {value.Length} characters; the maximum is {maximumLength}."),
+                parameterName);
+        }
+    }
 
     /// <summary>
     /// Fails closed on the location: absolute <c>file://</c> only.
@@ -166,12 +206,28 @@ public sealed record DocumentReference
                 nameof(fileName));
         }
 
+        // Windows strips trailing spaces and dots when resolving a path, so "CON " and "CON."
+        // resolve to the device CON while sailing past a naive reserved-name lookup. Rejecting the
+        // trailing character outright is simpler than replicating the stripping rules, and no
+        // legitimate display name ends in a space or a dot.
+        char last = fileName[^1];
+        if (last is ' ' or '.')
+        {
+            throw new ArgumentException(
+                "The file name must not end with a space or a dot: Windows strips both when resolving a path.",
+                nameof(fileName));
+        }
+
         foreach (char character in fileName)
         {
-            if (char.IsControl(character))
+            // Format characters (Unicode category Cf) are invisible and reorder what a human sees:
+            // U+202E RIGHT-TO-LEFT OVERRIDE is the classic trick for making "…annexRLOfdp.exe"
+            // render as "…annexexe.pdf" in a review UI. A display name that does not display what
+            // it is has no legitimate use here.
+            if (char.IsControl(character) || char.GetUnicodeCategory(character) == UnicodeCategory.Format)
             {
                 throw new ArgumentException(
-                    "The file name must not contain control characters: they enable header and log injection downstream.",
+                    "The file name must not contain control or Unicode format characters: they enable header and log injection, and spoof how the name renders.",
                     nameof(fileName));
             }
         }

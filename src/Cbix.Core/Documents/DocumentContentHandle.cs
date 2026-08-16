@@ -56,4 +56,49 @@ public sealed record DocumentContentHandle
 
     /// <summary>Gets the opaque, profile-defined resume token, or <see langword="null"/> when the profile needs none.</summary>
     public string? ProviderToken { get; }
+
+    /// <summary>
+    /// Reports whether this handle can be redeemed by the named profile for the given document,
+    /// having first rejected the one case that is never redeemable and never recoverable: a handle
+    /// belonging to a different document.
+    /// </summary>
+    /// <param name="document">The document the caller is preparing.</param>
+    /// <param name="profileName">The name of the profile attempting the redemption.</param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="profileName"/> is the profile that issued this
+    /// handle, so <see cref="ProviderToken"/> is meaningful to it; <see langword="false"/> when the
+    /// handle belongs to a different profile, in which case the caller re-prepares from scratch and
+    /// issues a new handle. A profile mismatch is an expected operational state after a provider
+    /// swap, not an error.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="profileName"/> is empty or white space, or - the case this guard exists for -
+    /// <paramref name="document"/> is not the document this handle was issued for.
+    /// </exception>
+    /// <remarks>
+    /// The asymmetry between the two mismatches is deliberate. A wrong <b>profile</b> costs one
+    /// repeated upload and is recovered by re-preparing. A wrong <b>document</b> cannot be recovered
+    /// by anything, because both of its silent outcomes are corruption: the caller gets content
+    /// prepared from another document (cache poisoning through a mismatched memo entry), and every
+    /// value extracted from it is recorded against the wrong source (mis-attributed provenance,
+    /// which the audit bar in design 8 exists to prevent). Returning <see langword="false"/> there
+    /// would let a caller "handle" it by carrying on with the wrong document, so it throws.
+    /// </remarks>
+    public bool IsRedeemableBy(DocumentReference document, string profileName)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileName);
+
+        if (!string.Equals(DocumentId, document.DocumentId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"This handle was issued for document '{DocumentId}' but was offered for document "
+                    + $"'{document.DocumentId}'. Redeeming it would prepare one document's content under "
+                    + "another document's identity.",
+                nameof(document));
+        }
+
+        return string.Equals(ProfileName, profileName, StringComparison.Ordinal);
+    }
 }

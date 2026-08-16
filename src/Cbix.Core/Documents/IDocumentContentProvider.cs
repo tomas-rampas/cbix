@@ -36,6 +36,14 @@ namespace Cbix.Core.Documents;
 /// cache to size, expire or invalidate. Each of S01-05, S01-06 and S01-07 has to get this right
 /// independently, which is why it is stated here rather than in one implementation.
 /// </para>
+/// <para>
+/// <b>Provider-side artefacts outlive the run scope, and nothing here deletes them.</b> The memo
+/// bound above covers this process's memory only: an uploaded Files API object (or any equivalent
+/// remote artefact) survives the run that created it, and its retention and deletion are
+/// deliberately unresolved - design 11's open retention question owns that decision. No
+/// implementer should read the run-scoped lifetime above as a guarantee that remote copies of a
+/// document are cleaned up.
+/// </para>
 /// </remarks>
 public interface IDocumentContentProvider
 {
@@ -46,11 +54,12 @@ public interface IDocumentContentProvider
     /// <param name="document">The document to present, identified by its registry identity and location.</param>
     /// <param name="resumeFrom">
     /// A handle previously returned in <see cref="DocumentContent.Handle"/> and read back from run
-    /// state or a checkpoint, or <see langword="null"/> for a first preparation. When supplied, the
-    /// implementation must rebuild equivalent content from
+    /// state or a checkpoint, or <see langword="null"/> for a first preparation. When supplied and
+    /// redeemable, the implementation rebuilds equivalent content from
     /// <see cref="DocumentContentHandle.ProviderToken"/> - reusing the uploaded file rather than
     /// uploading again. Rehydration is a parameter rather than a convention precisely because a
-    /// convention is what gets forgotten in the third implementation.
+    /// convention is what gets forgotten in the third implementation. See the handle policy in the
+    /// remarks for what happens when it is not redeemable.
     /// </param>
     /// <param name="cancellationToken">Token that cancels the preparation.</param>
     /// <returns>
@@ -86,6 +95,28 @@ public interface IDocumentContentProvider
     /// document, returning equivalent content each time, and must throw rather than return empty or
     /// partial content: silently returning less than requested would let a degraded run pass as a
     /// normal one.
+    /// </para>
+    /// <para>
+    /// <b>An unredeemable or stale handle means re-prepare, never fail.</b> A token can stop working
+    /// for reasons that are nobody's bug: a provider swap means <paramref name="resumeFrom"/> was
+    /// issued by a different profile, and a remote artefact can vanish through key rotation,
+    /// retention expiry or deletion. In every such case the implementation prepares the document
+    /// again from scratch and returns a <em>new</em> handle; it never fails the run over a dead
+    /// token. The guarantee that a resumed run repeats no work is about <em>model calls</em> - those
+    /// are the expensive, non-deterministic ones - and an occasional repeated upload or render is
+    /// the accepted price of resuming at all. The single exception is a handle belonging to a
+    /// different document, which
+    /// <see cref="DocumentContentHandle.IsRedeemableBy(DocumentReference, string)"/> throws for:
+    /// that is a programming error whose silent outcomes are cache poisoning and mis-attributed
+    /// provenance, never a recoverable operational state.
+    /// </para>
+    /// <para>
+    /// <b>The returned value is shared; treat it as read-only.</b> One preparation is handed to the
+    /// seven-way parallel section-agent fan-out, so every consumer sees the same instance. The
+    /// collection is returned as a read-only view, but <c>AIContent</c> blocks are mutable and
+    /// cannot be frozen by the type system: a consumer that sets a property on a block is mutating
+    /// what the other six are concurrently reading. Read the blocks, never edit them - a consumer
+    /// needing a variation builds its own list referencing its own new blocks.
     /// </para>
     /// </remarks>
     Task<DocumentContent> PrepareAsync(
