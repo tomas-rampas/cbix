@@ -255,10 +255,25 @@ public sealed record DocumentReference
             // U+202E RIGHT-TO-LEFT OVERRIDE is the classic trick for making "…annexRLOfdp.exe"
             // render as "…annexexe.pdf" in a review UI. A display name that does not display what
             // it is has no legitimate use here.
-            if (char.IsControl(character) || char.GetUnicodeCategory(character) == UnicodeCategory.Format)
+            //
+            // U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR are here for the CR/LF reason,
+            // not the rendering one, and they are easy to miss because char.IsControl says false for
+            // both. They end a line in JavaScript source, in a browser rendering a review UI, and in
+            // an NDJSON consumer that splits on Unicode line boundaries - so a name carrying one is a
+            // forged log entry delivered as a file name. Measured before this check existed:
+            // "report<U+2028>INFO: admin authorised.pdf" was accepted here and rendered intact by the
+            // ingest log sanitiser. The two rules are deliberately identical in both places; a name
+            // this constructor admits is a name PathBoundary.ForLog will eventually be asked to
+            // render, so a gap in either is a gap in both.
+            if (char.IsControl(character)
+                || char.GetUnicodeCategory(character)
+                    is UnicodeCategory.Format
+                    or UnicodeCategory.LineSeparator
+                    or UnicodeCategory.ParagraphSeparator)
             {
                 throw new ArgumentException(
-                    "The file name must not contain control or Unicode format characters: they enable header and log injection, and spoof how the name renders.",
+                    "The file name must not contain control characters, Unicode format characters, or Unicode line and paragraph separators: "
+                        + "they enable header and log injection, and spoof how the name renders.",
                     nameof(fileName));
             }
         }

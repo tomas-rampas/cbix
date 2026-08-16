@@ -25,6 +25,43 @@
          CoreAssemblyNeutralityTests' allowlist is a deliberate, commented act rather than a
          loophole. -->
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <!-- The local PDF text layer (design 5.1), and the corpus the validator's grounding gate
+         does verbatim string containment against (design 5.6). Latest STABLE line: 0.1.15,
+         released 2026-06-25; the 0.1.16-alpha-* stream on nuget.org is the project's rolling
+         CI feed and is not a release.
+
+         Why this belongs in Cbix.Core and does not weaken LLM-agnosticism: PdfPig is a local,
+         offline, Apache-2.0 PDF parsing library. It is a neutral document library, not a
+         provider SDK - it names no model provider, makes no network call, and is the same
+         dependency under every provider profile (the Claude native-PDF profile, the generic
+         vision profile and the text-only fallback all need this text layer). Adding it to
+         CoreAssemblyNeutralityTests' allowlist is therefore the deliberate act that list's
+         procedure describes, not a loophole.
+
+         Transitive closure: NONE on our target framework. PdfPig 0.1.15's nuspec declares
+         dependencies only for its .NET Framework 4.6.2/4.7.1 and netstandard2.0 groups
+         (Microsoft.Bcl.HashCode, System.Memory, System.ValueTuple - all polyfills); the
+         net6.0 and net8.0 groups are empty, and net10.0 resolves the net8.0 group. The
+         package does ship seven assemblies in one lib folder (UglyToad.PdfPig plus .Core,
+         .DocumentLayoutAnalysis, .Fonts, .Package, .Tokenization, .Tokens), so the
+         neutrality allowlist names the ones Core actually emits a reference to, not the
+         package id.
+
+         No bracket pin, and no claim that the version is safe because the package is
+         "stable": it is 0.1.x, and a 0.x scheme explicitly disclaims a stability promise.
+         What actually holds this version still is mechanical - the committed
+         packages.lock.json plus CI's locked restore, which fail the build if the resolved
+         version moves for any reason.
+
+         Upgrade procedure, and it is not a formality: this package IS the grounding corpus.
+         A PdfPig release that changes reading order, word-gap inference or whitespace by so
+         much as one character changes the text every SourceSnippet is checked against, and
+         that drift is invisible in a build, a unit test and a diff alike - it surfaces only
+         as grounding-gate failures on documents that used to pass. So a version bump
+         requires a green golden-set run before it ships (CLAUDE.md quality gate), and until
+         the eval harness exists there is no way to see the damage at all. Bump deliberately
+         or not at all. -->
+    <PackageVersion Include="PdfPig" Version="0.1.15" />
   </ItemGroup>
 
   <ItemGroup Label="Provider adapter (Anthropic) - story S01-08">

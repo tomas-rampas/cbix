@@ -98,6 +98,7 @@ public sealed partial class DocumentIngestService
 
     private readonly IDocumentRegistry _registry;
     private readonly IIngestAuditLog _auditLog;
+    private readonly ITextLayerExtractor _textLayerExtractor;
     private readonly ILogger<DocumentIngestService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly DocumentIngestOptions _options;
@@ -108,6 +109,10 @@ public sealed partial class DocumentIngestService
     /// <param name="registry">The store of record for documents that have entered the pipeline.</param>
     /// <param name="auditLog">The append-only trail of ingest decisions.</param>
     /// <param name="options">Where documents may be read from, and how large one may be.</param>
+    /// <param name="textLayerExtractor">
+    /// Produces the local text layer for each newly registered document - the grounding corpus of
+    /// design 5.6.
+    /// </param>
     /// <param name="logger">Sink for the structured refusal events that make containment observable.</param>
     /// <param name="timeProvider">
     /// Clock used for audit and registration timestamps. Defaults to
@@ -126,16 +131,19 @@ public sealed partial class DocumentIngestService
         IDocumentRegistry registry,
         IIngestAuditLog auditLog,
         DocumentIngestOptions options,
+        ITextLayerExtractor textLayerExtractor,
         ILogger<DocumentIngestService> logger,
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(textLayerExtractor);
         ArgumentNullException.ThrowIfNull(logger);
 
         _registry = registry;
         _auditLog = auditLog;
+        _textLayerExtractor = textLayerExtractor;
         _options = options;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -167,8 +175,9 @@ public sealed partial class DocumentIngestService
     /// <param name="mediaType">IANA media type of the document bytes. Defaults to <c>application/pdf</c>.</param>
     /// <param name="cancellationToken">Token that cancels the read and the registration.</param>
     /// <returns>
-    /// The reference to the document as read, the registry entry now standing for these bytes, and
-    /// whether this submission was the one that created it.
+    /// The reference to the document as read, the registry entry now standing for these bytes,
+    /// whether this submission was the one that created it, and - only when it did - the local text
+    /// layer extracted for it.
     /// </returns>
     /// <exception cref="ArgumentException">
     /// <paramref name="documentPath"/> or <paramref name="mediaType"/> is empty or white space, or
@@ -180,8 +189,9 @@ public sealed partial class DocumentIngestService
     /// past the point of refusal and nothing is registered.
     /// </exception>
     /// <exception cref="DocumentNotIngestibleException">
-    /// The submission is inside the root but is not a usable document: a directory, an empty file, or
-    /// one larger than the configured maximum.
+    /// The submission is inside the root but is not a usable document: a directory, an empty file,
+    /// one larger than the configured maximum, or - raised after registration, by the text-layer
+    /// extraction step - a file the local PDF parser cannot read.
     /// </exception>
     /// <exception cref="FileNotFoundException">There is no file at the resolved path.</exception>
     /// <exception cref="DirectoryNotFoundException">Part of the resolved path does not exist.</exception>
@@ -282,7 +292,42 @@ public sealed partial class DocumentIngestService
 
         await _auditLog.RecordAsync(auditEntry, cancellationToken).ConfigureAwait(false);
 
-        return new DocumentIngestResult(submitted, registration.Entry, registration.IsNewRegistration);
+        // Document preparation, and it runs last of the three for two separate reasons.
+        //
+        // After the registry, because the registry is what decides whether there is any work left:
+        // a duplicate's run stops there (design 5.1), so preparing it would be work done for a run
+        // that does not continue - free today, a Files API upload and provider tokens once S01-12
+        // joins this step. `IsNewRegistration` is the short-circuit, and it can only be known after
+        // RegisterAsync.
+        //
+        // After the audit entry, because the registration genuinely happened and the trail has to
+        // say so whatever follows. Slotting a step that fails on ordinary bad input between the
+        // registry write and its audit entry would manufacture, on a routine failure path, exactly
+        // the registered-but-unaudited gap the comment above tolerates only for a crash.
+        //
+        // The cost of that ordering, stated rather than implied: a document whose bytes register
+        // fine but which is then refused by preparation ends up registered, with a DocumentRegistered
+        // entry, and this call throws. Re-submitting does not repair it - the document is now known,
+        // so the second submission is a duplicate and never re-extracts.
+        //
+        // That is sound precisely because ITextLayerExtractor's refusals are deterministic in the
+        // bytes: Unreadable, TooLarge and UnsupportedPageNumbering all describe the file itself, and
+        // the same file will be refused identically on any retry. There is nothing to gain by
+        // re-running preparation for it, and the registry is behaving as designed - it records
+        // document identity, not run state.
+        //
+        // Transient failures are deliberately kept out of that set. An IOException from a share that
+        // dropped, and an OutOfMemoryException from a decompression bomb, propagate as themselves
+        // rather than being rewritten as refusals; the run fails and the document keeps whatever
+        // registry state it had, instead of a passing network fault permanently marking a document as
+        // one that has no text layer. Recovering a run whose preparation failed belongs to the
+        // extraction_runs table and the review queue in Sprint 03, not to a second pass through the
+        // ingest gate.
+        TextLayer? textLayer = registration.IsNewRegistration
+            ? await _textLayerExtractor.ExtractAsync(submitted, cancellationToken).ConfigureAwait(false)
+            : null;
+
+        return new DocumentIngestResult(submitted, registration.Entry, registration.IsNewRegistration, textLayer);
     }
 
     /// <summary>
@@ -352,17 +397,28 @@ public sealed partial class DocumentIngestService
     /// <para>
     /// <b>A <see cref="Uri"/> is not a container for a file path.</b> Its constructor percent-decodes
     /// and applies RFC 3986 dot-segment removal - both correct for a URI, both wrong for a file name,
-    /// because <c>%</c> is an ordinary character in a file name and URL-encoded names in a drop share
-    /// are routine rather than exotic. Measured on a real tree: a file <c>%2e%2e\evil.pdf</c> inside
-    /// the root was hashed correctly while its location named a file <em>outside</em> the root, and
-    /// <c>annex%41.pdf</c> produced a location naming a non-existent <c>annexA.pdf</c>. In both cases
-    /// the digest described one file and the provenance described another.
+    /// because <c>%</c> is an ordinary character in a file name. Measured on a real tree: a file
+    /// <c>%2e%2e\evil.pdf</c> inside the root was hashed correctly while its location named a file
+    /// <em>outside</em> the root, and <c>annex%41.pdf</c> produced a location naming a non-existent
+    /// <c>annexA.pdf</c>. In both cases the digest described one file and the provenance described
+    /// another.
     /// </para>
     /// <para>
-    /// Rather than hand-roll an escaping scheme for every quirk of the URI grammar, the round trip is
-    /// asserted: the location must render back to exactly the path that was resolved, and must still
-    /// lie under the ingest root. Anything else is refused. This is the difference between believing
-    /// a conversion is lossless and checking that this one was.
+    /// <b>The class of names this actually refuses is narrow, and worth stating precisely so nobody
+    /// over-reads the paragraph above.</b> Measured on .NET 10: only a literal <c>%</c> followed by
+    /// two hexadecimal digits breaks the round trip. A bare <c>%</c>, <c>#</c>, <c>?</c>, spaces,
+    /// umlauts, CJK characters and emoji all survive it unchanged. So this refusal costs a real
+    /// deployment approximately nothing - a document named with a literal <c>%2e</c> sequence is a
+    /// genuine rarity, not a routine drop-share name.
+    /// </para>
+    /// <para>
+    /// <b>That makes the round-trip assertion a permanent design decision, not a stopgap awaiting a
+    /// proper escaping scheme.</b> Hand-rolling an escaper for every quirk of the URI grammar would
+    /// buy the ability to accept a vanishingly rare name in exchange for a second, subtler place
+    /// where a path can be silently rewritten. Asserting instead is the difference between believing
+    /// a conversion is lossless and checking that this one was: the location must render back to
+    /// exactly the path that was resolved, and must still lie under the ingest root. Anything else is
+    /// refused, and the refusal is a named, logged outcome rather than a corrupted provenance record.
     /// </para>
     /// </remarks>
     private Uri BuildContainedLocation(string documentPath, string resolvedPath)
@@ -385,15 +441,52 @@ public sealed partial class DocumentIngestService
     /// before anything is read.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The rules are not restated here - the constructor is called with a placeholder identity and
     /// the result discarded - because a second copy of "what makes a file name acceptable" would
     /// drift from the first, and the copy that drifts is always the one guarding the cheap path. The
     /// real reference is built from the digest once the bytes are read, and its constructor remains
     /// the backstop; this only moves the failure earlier, so a name that can never be accepted does
     /// not first pay for a full read and hash.
+    /// </para>
+    /// <para>
+    /// <b>The probe is wrapped so that this refusal is logged like every other one.</b> It was
+    /// previously the single refusal class in this service that emitted no structured event - the
+    /// constructor's <see cref="ArgumentException"/> simply flew - which contradicted the class
+    /// doc's promise that a refusal is always visible to a SIEM whether or not a caller catches it.
+    /// The gap mattered more than most: the inputs this rejects are the deliberately hostile ones -
+    /// a U+202E display name that renders <c>annex&lt;RLO&gt;fdp.exe</c> as <c>annexexe.pdf</c>, a
+    /// control character aimed at a log line, a reserved Windows device name - so it was precisely
+    /// the attacks nobody was told about.
+    /// </para>
+    /// <para>
+    /// The exception is rethrown unchanged rather than translated. Its message names the rule that
+    /// was broken, which is what a supplier fixing their file name needs, and re-wrapping it would
+    /// change an established refusal contract for the sake of logging. Only the file name is
+    /// recorded - sanitised, because a name being refused for containing a format character is a
+    /// name that must not be rendered raw into the very log the refusal is reported in. The
+    /// propagating exception still carries the raw name in its own <c>Message</c>, so anything that
+    /// logs the exception logs it unsanitised; that is the same bounded residual as item (4) on the
+    /// class doc, and the structured event here is the one an alerting pipeline should key on.
+    /// </para>
     /// </remarks>
-    private static void AssertReferenceIsConstructible(Uri location, string fileName, string mediaType) =>
-        _ = new DocumentReference(ProbeDocumentId, location, fileName, mediaType);
+    private void AssertReferenceIsConstructible(Uri location, string fileName, string mediaType)
+    {
+        try
+        {
+            _ = new DocumentReference(ProbeDocumentId, location, fileName, mediaType);
+        }
+        catch (ArgumentException error)
+        {
+            LogUnacceptableReferenceShape(
+                _logger,
+                PathBoundary.ForLog(fileName),
+                error.ParamName ?? "unknown",
+                error.GetType().FullName ?? error.GetType().Name);
+
+            throw;
+        }
+    }
 
     /// <summary>Containment stage 3: the opened file must have exactly one name.</summary>
     private void RefuseMultiplyLinkedFile(string documentPath, string resolvedPath, FileStream content)
@@ -610,4 +703,26 @@ public sealed partial class DocumentIngestService
         Level = LogLevel.Error,
         Message = "Ingest could not read a submitted document. Document='{DocumentPath}', failure={FailureType}.")]
     private static partial void LogDocumentReadFailed(ILogger logger, string documentPath, string failureType);
+
+    /// <summary>
+    /// Structured event for a submission whose leaf name or media type can never construct a
+    /// <see cref="DocumentReference"/>.
+    /// </summary>
+    /// <remarks>
+    /// Its own event id rather than a reuse of <see cref="LogDocumentRefused"/>'s: this refusal is
+    /// decided by <see cref="DocumentReference"/>'s shape rules and carries a parameter name instead
+    /// of a <see cref="DocumentNotIngestibleReason"/>, and folding two different refusal shapes onto
+    /// one id would make an alert rule unable to tell them apart. The file name has been through
+    /// <see cref="PathBoundary.ForLog"/>, which is what makes naming it in the template safe - a
+    /// name refused for carrying U+202E is exactly the string that must not be rendered raw here.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1014,
+        Level = LogLevel.Error,
+        Message = "Ingest refused a submission whose reference shape is unacceptable. FileName='{FileName}', parameter={ParameterName}, failure={FailureType}.")]
+    private static partial void LogUnacceptableReferenceShape(
+        ILogger logger,
+        string fileName,
+        string parameterName,
+        string failureType);
 }

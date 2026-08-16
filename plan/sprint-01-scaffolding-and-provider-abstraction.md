@@ -274,7 +274,7 @@ Done means:
 
 ---
 
-### [ ] S01-11 — Ingest executor: PDFPig text layer extraction
+### [x] S01-11 — Ingest executor: PDFPig text layer extraction
 
 As the pipeline
 I want the ingest executor to extract a local text layer with PDFPig for every registered document

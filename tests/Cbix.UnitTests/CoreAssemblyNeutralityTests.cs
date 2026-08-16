@@ -37,6 +37,32 @@ public sealed class CoreAssemblyNeutralityTests
         // the host chooses sinks.
         "Microsoft.Extensions.Logging.Abstractions",
 
+        // Added deliberately for story S01-11, following the same procedure. PdfPig is a neutral
+        // local document library, not a provider SDK: Apache-2.0, entirely offline, it names no
+        // model provider and makes no network call. It is also provider-invariant by role - the
+        // local text layer is the grounding corpus of design 5.6 and is needed identically under
+        // every capability profile (Claude native-PDF, generic vision, text-only), so it can never
+        // become the thing that ties Core to one vendor.
+        //
+        // Three entries, not one, and none is the package id: the PdfPig package ships seven
+        // assemblies, and these are the ones Cbix.Core actually emits a reference to. Listing only
+        // what is referenced is what keeps this test meaningful; each addition names why the code
+        // started needing it.
+        //
+        //   UglyToad.PdfPig                        - the reader itself: PdfDocument, Page.
+        //   UglyToad.PdfPig.DocumentLayoutAnalysis - ContentOrderTextExtractor, the reading-order
+        //                                            text extraction the grounding corpus is built
+        //                                            from.
+        //   UglyToad.PdfPig.Tokens                 - NameToken, needed to interrogate the document
+        //                                            catalogue for a /PageLabels number tree. The
+        //                                            catalogue is a token dictionary, so asking it a
+        //                                            question means naming a token type; looking the
+        //                                            key up as a string would depend on how PdfPig
+        //                                            happens to render tokens today.
+        "UglyToad.PdfPig",
+        "UglyToad.PdfPig.DocumentLayoutAnalysis",
+        "UglyToad.PdfPig.Tokens",
+
         "netstandard",
         "mscorlib",
     ];

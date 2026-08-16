@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
+using Cbix.Core.Documents;
 using Cbix.Core.Ingest;
 
 using Microsoft.Extensions.Logging;
@@ -28,6 +29,28 @@ public sealed class DocumentIngestServiceTests : IDisposable
 
     private const long MaxDocumentBytes = 4096;
 
+    /// <summary>
+    /// Event ids this service emits, pinned so a renumbering breaks a test rather than an alert rule.
+    /// </summary>
+    /// <remarks>
+    /// The id is the part of a log event a SIEM actually keys on: message text is prose and may be
+    /// reworded without consequence, but an id that silently changes detaches every rule watching for
+    /// it - and these particular rules are what monitor the write-restricted-share assumption the
+    /// containment boundary depends on. Deliberately spelled out here rather than read back from the
+    /// production constants, so that a test compares two independently-stated values instead of
+    /// comparing the code against itself.
+    /// </remarks>
+    private const int ContainmentRefusalEventId = 1010;
+
+    /// <inheritdoc cref="ContainmentRefusalEventId" />
+    private const int DocumentRefusedEventId = 1011;
+
+    /// <inheritdoc cref="ContainmentRefusalEventId" />
+    private const int DocumentReadFailedEventId = 1012;
+
+    /// <inheritdoc cref="ContainmentRefusalEventId" />
+    private const int UnacceptableReferenceShapeEventId = 1014;
+
     private readonly DirectoryInfo _workspace;
     private readonly string _ingestRoot;
     private readonly string _outsideRoot;
@@ -35,6 +58,7 @@ public sealed class DocumentIngestServiceTests : IDisposable
     private readonly InMemoryIngestAuditLog _auditLog = new();
     private readonly CapturingLogger _logger = new();
     private readonly FixedClock _clock = new(FirstSubmission);
+    private readonly RecordingTextLayerExtractor _textLayers = new();
 
     public DocumentIngestServiceTests()
     {
@@ -180,6 +204,73 @@ public sealed class DocumentIngestServiceTests : IDisposable
         DocumentIngestResult result = await Service().IngestAsync("DE_SPECIMEN.pdf");
 
         Assert.True(result.IsNewRegistration);
+    }
+
+    // ---------------------------------------------------------------- text layer preparation
+
+    [Fact]
+    public async Task IngestAsync_FirstSubmission_ExtractsTheTextLayerForTheDocumentItRegistered()
+    {
+        string documentPath = WriteDocument(_ingestRoot, "DE_SPECIMEN.pdf", "cross-border instruction");
+
+        DocumentIngestResult result = await Service().IngestAsync(documentPath);
+
+        DocumentReference asked = Assert.Single(_textLayers.Calls);
+
+        // Extraction is handed the reference ingest itself minted, so it opens the resolved,
+        // contained, round-trip-stable path whose bytes were hashed - not the path the caller typed.
+        Assert.Equal(result.Submitted.DocumentId, asked.DocumentId);
+        Assert.Equal(documentPath, asked.Location.LocalPath);
+
+        Assert.NotNull(result.TextLayer);
+        Assert.Equal(result.ContentHash.Canonical, result.TextLayer.DocumentId);
+        Assert.Equal(1, result.TextLayer.PageCount);
+    }
+
+    [Fact]
+    public async Task IngestAsync_DuplicateSubmission_DoesNotReExtractTheTextLayer()
+    {
+        // The ordering this asserts is the point: the registry short-circuits before document
+        // preparation, so a re-submission stops at "already known" rather than repeating work its
+        // run will not use. Free today; a Files API upload and provider tokens once S01-12 joins
+        // this step.
+        string documentPath = WriteDocument(_ingestRoot, "DE_SPECIMEN.pdf", "cross-border instruction");
+        DocumentIngestService service = Service();
+
+        DocumentIngestResult first = await service.IngestAsync(documentPath);
+        DocumentIngestResult duplicate = await service.IngestAsync(documentPath);
+
+        Assert.True(first.IsNewRegistration);
+        Assert.False(duplicate.IsNewRegistration);
+
+        Assert.Single(_textLayers.Calls);
+        Assert.NotNull(first.TextLayer);
+        Assert.Null(duplicate.TextLayer);
+    }
+
+    [Fact]
+    public async Task IngestAsync_UnreadableDocument_RefusesAfterRegisteringAndAuditing()
+    {
+        // Pins the stated cost of running preparation last. The refusal reaches the caller as the
+        // ingest refusal family, not as whatever the parser raised; and the registry row plus its
+        // audit entry survive, because the registration really did happen and a trail that omits it
+        // would be a trail that lies.
+        string documentPath = WriteDocument(_ingestRoot, "DE_SPECIMEN.pdf", "not really a pdf");
+        DocumentIngestService service = new(
+            _registry,
+            _auditLog,
+            new DocumentIngestOptions(_ingestRoot, MaxDocumentBytes),
+            new UnreadableTextLayerExtractor(),
+            _logger,
+            _clock);
+
+        DocumentNotIngestibleException refusal =
+            await Assert.ThrowsAsync<DocumentNotIngestibleException>(() => service.IngestAsync(documentPath));
+
+        Assert.Equal(DocumentNotIngestibleReason.Unreadable, refusal.Reason);
+        Assert.Single(_registry.Entries);
+        Assert.Single(_auditLog.Entries);
+        Assert.Equal(IngestAuditEventType.DocumentRegistered, _auditLog.Entries[0].EventType);
     }
 
     // ---------------------------------------------------------------- containment probes
@@ -463,7 +554,9 @@ public sealed class DocumentIngestServiceTests : IDisposable
         IngestRootViolationException refusal = await Assert.ThrowsAsync<IngestRootViolationException>(
             () => Service().IngestAsync(Hostile));
 
-        string logged = Assert.Single(_logger.Entries).Message;
+        (LogLevel Level, int EventId, string Message) entry = Assert.Single(_logger.Entries);
+        Assert.Equal(ContainmentRefusalEventId, entry.EventId);
+        string logged = entry.Message;
 
         Assert.DoesNotContain('\r', logged);
         Assert.DoesNotContain('\n', logged);
@@ -478,6 +571,130 @@ public sealed class DocumentIngestServiceTests : IDisposable
 
         // The unmodified path stays available on the typed property, for code rather than for logs.
         Assert.Equal(Hostile, refusal.SubmittedPath);
+    }
+
+    [Fact]
+    public async Task IngestAsync_RefusalOfAPathWithALoneSurrogate_ReplacesItInTheLog()
+    {
+        // A lone surrogate is not a character: it is half of one. .NET strings hold it happily
+        // because they are UTF-16 code units rather than text, and it reaches a log sink as invalid
+        // UTF-16 - which at worst breaks that sink's encoder and turns a security event into a lost
+        // one. The hazard belongs to the code unit, not to any truncation boundary, so it is
+        // replaced wherever it appears.
+        const string LoneSurrogate = "\\\\attacker.example\\share\\lone\uD800.pdf";
+
+        await Assert.ThrowsAsync<IngestRootViolationException>(() => Service().IngestAsync(LoneSurrogate));
+
+        (LogLevel Level, int EventId, string Message) entry = Assert.Single(_logger.Entries);
+        Assert.Equal(ContainmentRefusalEventId, entry.EventId);
+        string logged = entry.Message;
+
+        Assert.DoesNotContain('\uD800', logged);
+        Assert.Contains('\uFFFD', logged);
+    }
+
+    [Fact]
+    public async Task IngestAsync_RefusalOfAPathWithAWellFormedSurrogatePair_ReplacesBothHalves()
+    {
+        // Pins the accepted cost of replacing on the category rather than on pairing: a legitimate
+        // astral-plane name - here U+1F4C4 PAGE FACING UP - renders as two replacement characters.
+        // Deliberate. The alternative is pair-aware scanning that admits exactly the code units the
+        // sanitiser exists to neutralise, in exchange for prettier rendering of a path that is being
+        // logged precisely because its submission was refused.
+        const string AstralPlane = "\\\\attacker.example\\share\\report\U0001F4C4.pdf";
+
+        await Assert.ThrowsAsync<IngestRootViolationException>(() => Service().IngestAsync(AstralPlane));
+
+        (LogLevel Level, int EventId, string Message) entry = Assert.Single(_logger.Entries);
+        Assert.Equal(ContainmentRefusalEventId, entry.EventId);
+        string logged = entry.Message;
+
+        Assert.DoesNotContain('\uD83D', logged);
+        Assert.DoesNotContain('\uDCC4', logged);
+        Assert.Contains("\uFFFD\uFFFD", logged, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData('\u2028')] // LINE SEPARATOR
+    [InlineData('\u2029')] // PARAGRAPH SEPARATOR
+    public async Task IngestAsync_RefusalOfAPathWithAUnicodeLineBreak_ReplacesItInTheLog(char separator)
+    {
+        // The CR/LF attack in a costume that char.IsControl does not recognise. U+2028 and U+2029 end
+        // a line in JavaScript, in a browser rendering a log viewer, and in any NDJSON consumer that
+        // splits on Unicode line boundaries - so the forged entry lands exactly as it would with a
+        // bare newline. Measured before this was fixed: the payload below travelled into the log
+        // intact.
+        string forged = $"\\\\attacker.example\\share\\report{separator}INFO: admin authorised.pdf";
+
+        await Assert.ThrowsAsync<IngestRootViolationException>(() => Service().IngestAsync(forged));
+
+        string logged = Assert.Single(_logger.Entries).Message;
+
+        Assert.DoesNotContain(separator, logged);
+        Assert.Contains('\uFFFD', logged);
+
+        // The text still travels - it is evidence - but it can no longer start its own line.
+        Assert.Contains("INFO: admin authorised.pdf", logged, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IngestAsync_RefusalOfAnOverlongPath_MarksTheLoggedPathAsTruncated()
+    {
+        // Without the marker a truncated path reads as a complete one, and an operator compares it
+        // against the share, finds nothing, and concludes the alert was noise.
+        string overlong = "\\\\attacker.example\\share\\" + new string('a', 600) + ".pdf";
+
+        await Assert.ThrowsAsync<IngestRootViolationException>(() => Service().IngestAsync(overlong));
+
+        string logged = Assert.Single(_logger.Entries).Message;
+
+        Assert.Contains("...[truncated]", logged, StringComparison.Ordinal);
+
+        // Bounded, not merely annotated: an unbounded path in a log line is a flooding hazard on its
+        // own.
+        Assert.DoesNotContain(new string('a', 600), logged, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IngestAsync_LeafNameThatCanNeverConstructAReference_IsRefusedAndLogged()
+    {
+        // This was the one refusal class in this service that emitted no structured event: the
+        // DocumentReference constructor's ArgumentException simply flew, so the SIEM saw nothing.
+        // The inputs it rejects are the deliberately hostile ones, which made it the worst possible
+        // gap to leave - the refusal existed, but nobody was told about it.
+        //
+        // "annex..evil.pdf" is a legal file name on every host and is refused by the reference's
+        // rules for containing "..", so the probe is exercised without the test depending on a name
+        // the file system might decline to create.
+        string documentPath = WriteDocument(_ingestRoot, "annex..evil.pdf", "cross-border instruction");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Service().IngestAsync(documentPath));
+
+        (LogLevel Level, int EventId, string Message) entry = Assert.Single(_logger.Entries);
+
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Contains("fileName", entry.Message, StringComparison.Ordinal);
+
+        // Refused before a byte was read, so nothing is registered and no document-scoped audit
+        // entry exists to write - the security signal is the log event, which is the point.
+        AssertNothingWasAdmitted();
+    }
+
+    [Fact]
+    public async Task IngestAsync_LeafNameCarryingAFormatCharacter_IsNotRenderedRawIntoItsOwnRefusalEvent()
+    {
+        // The refusal and the sanitiser have to compose: a name rejected for carrying U+202E is
+        // exactly the string that must not reach the log that reports the rejection.
+        string documentPath = WriteDocument(_ingestRoot, "annex\u202Efdp.pdf", "cross-border instruction");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Service().IngestAsync(documentPath));
+
+        (LogLevel Level, int EventId, string Message) entry = Assert.Single(_logger.Entries);
+        Assert.Equal(UnacceptableReferenceShapeEventId, entry.EventId);
+        string logged = entry.Message;
+
+        Assert.DoesNotContain('\u202E', logged);
+        Assert.Contains('\uFFFD', logged);
     }
 
     // ---------------------------------------------------------------- not-a-document outcomes
@@ -519,6 +736,14 @@ public sealed class DocumentIngestServiceTests : IDisposable
         Assert.Equal(DocumentNotIngestibleReason.Empty, refusal.Reason);
         Assert.Equal(0, refusal.ByteLength);
         AssertNothingWasAdmitted();
+
+        // Its own event id, distinct from the containment one: a data-quality refusal and a security
+        // refusal warrant different operational responses, so an alert rule has to be able to tell
+        // them apart without parsing message text.
+        (LogLevel Level, int EventId, string Message) logged = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Error, logged.Level);
+        Assert.Equal(DocumentRefusedEventId, logged.EventId);
+        Assert.NotEqual(ContainmentRefusalEventId, logged.EventId);
     }
 
     [Fact]
@@ -559,8 +784,9 @@ public sealed class DocumentIngestServiceTests : IDisposable
 
         // A failure this service did not decide still has to leave a trace: the exception type alone,
         // because the BCL message embeds the path unsanitised.
-        (LogLevel Level, string Message) logged = Assert.Single(_logger.Entries);
+        (LogLevel Level, int EventId, string Message) logged = Assert.Single(_logger.Entries);
         Assert.Equal(LogLevel.Error, logged.Level);
+        Assert.Equal(DocumentReadFailedEventId, logged.EventId);
         Assert.Contains(nameof(FileNotFoundException), logged.Message, StringComparison.Ordinal);
         AssertNothingWasAdmitted();
     }
@@ -604,6 +830,7 @@ public sealed class DocumentIngestServiceTests : IDisposable
             _registry,
             new ThrowingAuditLog(),
             new DocumentIngestOptions(_ingestRoot, MaxDocumentBytes),
+            _textLayers,
             NullLogger<DocumentIngestService>.Instance,
             _clock);
 
@@ -620,13 +847,15 @@ public sealed class DocumentIngestServiceTests : IDisposable
         DocumentIngestOptions options = new(_ingestRoot, MaxDocumentBytes);
 
         Assert.Throws<ArgumentNullException>(
-            () => new DocumentIngestService(null!, _auditLog, options, NullLogger<DocumentIngestService>.Instance));
+            () => new DocumentIngestService(null!, _auditLog, options, _textLayers, NullLogger<DocumentIngestService>.Instance));
         Assert.Throws<ArgumentNullException>(
-            () => new DocumentIngestService(_registry, null!, options, NullLogger<DocumentIngestService>.Instance));
+            () => new DocumentIngestService(_registry, null!, options, _textLayers, NullLogger<DocumentIngestService>.Instance));
         Assert.Throws<ArgumentNullException>(
-            () => new DocumentIngestService(_registry, _auditLog, null!, NullLogger<DocumentIngestService>.Instance));
+            () => new DocumentIngestService(_registry, _auditLog, null!, _textLayers, NullLogger<DocumentIngestService>.Instance));
         Assert.Throws<ArgumentNullException>(
-            () => new DocumentIngestService(_registry, _auditLog, options, null!));
+            () => new DocumentIngestService(_registry, _auditLog, options, null!, NullLogger<DocumentIngestService>.Instance));
+        Assert.Throws<ArgumentNullException>(
+            () => new DocumentIngestService(_registry, _auditLog, options, _textLayers, null!));
     }
 
     [Fact]
@@ -717,6 +946,7 @@ public sealed class DocumentIngestServiceTests : IDisposable
         new(_registry,
             _auditLog,
             new DocumentIngestOptions(ingestRoot ?? _ingestRoot, MaxDocumentBytes),
+            _textLayers,
             _logger,
             _clock);
 
@@ -730,7 +960,14 @@ public sealed class DocumentIngestServiceTests : IDisposable
     {
         // A refusal that only throws is invisible until something catches it; the security event is
         // what the SIEM sees, and it is what monitors the write-restricted-share assumption.
-        Assert.Contains(_logger.Entries, entry => entry.Level == LogLevel.Error);
+        //
+        // The event id is asserted, not just the level. An alert rule keys on the id, so the id is
+        // the log's actual contract - message wording is prose that may legitimately be reworded,
+        // while a renumbering silently detaches every rule watching for it. Every caller of this
+        // helper is a containment probe, which is why one id is right here.
+        Assert.Contains(
+            _logger.Entries,
+            entry => entry.Level == LogLevel.Error && entry.EventId == ContainmentRefusalEventId);
     }
 
     /// <summary>A clock the test moves by hand, so "first seen" and "recorded at" are exact values rather than "about now".</summary>
@@ -739,6 +976,47 @@ public sealed class DocumentIngestServiceTests : IDisposable
         public DateTimeOffset UtcNow { get; set; } = utcNow;
 
         public override DateTimeOffset GetUtcNow() => UtcNow;
+    }
+
+    /// <summary>
+    /// A text-layer extractor that records what it was asked for and answers with a fixed page.
+    /// </summary>
+    /// <remarks>
+    /// A stub, not the real PDFPig extractor, for two reasons. The documents these tests write are
+    /// short strings rather than valid PDFs - the gate's subject is bytes and paths, not page
+    /// structure - and the properties under test here are about <em>how often</em> and <em>with
+    /// what</em> extraction is invoked, which only a seam can answer. The PDFPig implementation has
+    /// its own tests against the real specimen.
+    /// </remarks>
+    private sealed class RecordingTextLayerExtractor : ITextLayerExtractor
+    {
+        private readonly List<DocumentReference> _calls = [];
+
+        public IReadOnlyList<DocumentReference> Calls => _calls;
+
+        public Task<TextLayer> ExtractAsync(DocumentReference document, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(document);
+
+            _calls.Add(document);
+
+            return Task.FromResult(new TextLayer(document.DocumentId, ["extracted page one"]));
+        }
+    }
+
+    /// <summary>An extractor standing in for a file the PDF parser cannot read.</summary>
+    private sealed class UnreadableTextLayerExtractor : ITextLayerExtractor
+    {
+        public Task<TextLayer> ExtractAsync(DocumentReference document, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(document);
+
+            throw new DocumentNotIngestibleException(
+                DocumentNotIngestibleReason.Unreadable,
+                document.Location.LocalPath,
+                byteLength: null,
+                new InvalidOperationException("the parser gave up"));
+        }
     }
 
     /// <summary>An audit sink that cannot record, standing in for a durable store that is down.</summary>
@@ -751,9 +1029,9 @@ public sealed class DocumentIngestServiceTests : IDisposable
     /// <summary>Captures log entries so the refusal signal can be asserted rather than assumed.</summary>
     private sealed class CapturingLogger : ILogger<DocumentIngestService>
     {
-        private readonly List<(LogLevel Level, string Message)> _entries = [];
+        private readonly List<(LogLevel Level, int EventId, string Message)> _entries = [];
 
-        public IReadOnlyList<(LogLevel Level, string Message)> Entries => _entries;
+        public IReadOnlyList<(LogLevel Level, int EventId, string Message)> Entries => _entries;
 
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
@@ -769,7 +1047,7 @@ public sealed class DocumentIngestServiceTests : IDisposable
         {
             ArgumentNullException.ThrowIfNull(formatter);
 
-            _entries.Add((logLevel, formatter(state, exception)));
+            _entries.Add((logLevel, eventId.Id, formatter(state, exception)));
         }
     }
 

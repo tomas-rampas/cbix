@@ -185,6 +185,28 @@ public sealed class DocumentReferenceTests
         Assert.Equal("fileName", error.ParamName);
     }
 
+    [Theory]
+    [InlineData('\u2028')] // LINE SEPARATOR
+    [InlineData('\u2029')] // PARAGRAPH SEPARATOR
+    public void Constructor_FileNameWithUnicodeLineBreak_Throws(char separator)
+    {
+        // The CR/LF log-forging attack in a code point that char.IsControl reports as false, which is
+        // exactly why it survived the original check. U+2028 and U+2029 terminate a line in
+        // JavaScript source, in a browser rendering a review UI, and in an NDJSON consumer splitting
+        // on Unicode line boundaries - so this name is a fabricated log entry wearing a file name.
+        //
+        // Measured before this rule existed: "report<U+2028>INFO: admin authorised.pdf" was accepted
+        // here and then rendered intact by the ingest log sanitiser, which had the same gap. The two
+        // rule sets are deliberately identical, because a name this constructor admits is a name that
+        // sanitiser will eventually be asked to render.
+        string fileName = $"report{separator}INFO: admin authorised.pdf";
+
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => new DocumentReference("sha256:abc", SpecimenLocation, fileName));
+
+        Assert.Equal("fileName", error.ParamName);
+    }
+
     [Fact]
     public void Constructor_OverlongDocumentId_Throws()
     {

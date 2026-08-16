@@ -38,11 +38,21 @@ public sealed class IngestContentHashAndDedupeSteps(IngestContentHashAndDedupeSt
 
         Assert.True(File.Exists(specimenPath), $"The DE specimen is missing from the repository at '{specimenPath}'.");
 
+        // One options instance shared by the gate and the extractor, exactly as the composition root
+        // will do it: the size bound the extractor re-applies to its reopened handle has to be the
+        // same bound the gate counted against, and sharing the object is what makes that structural.
+        DocumentIngestOptions options = new(ingestRoot, DocumentIngestOptions.ClaudeFilesApiLimitBytes);
+
         state.SpecimenPath = specimenPath;
         state.Service = new DocumentIngestService(
             state.Registry,
             state.AuditLog,
-            new DocumentIngestOptions(ingestRoot, DocumentIngestOptions.ClaudeFilesApiLimitBytes),
+            options,
+            // The real extractor, not a stub: these scenarios submit the real specimen, so the
+            // production preparation step runs on it exactly as it would in a run. Text-layer
+            // behaviour itself is asserted by S01-11's scenarios; here it simply must not be
+            // simulated away.
+            new PdfPigTextLayerExtractor(options, NullLogger<PdfPigTextLayerExtractor>.Instance),
             NullLogger<DocumentIngestService>.Instance);
 
         Assert.Empty(state.Registry.Entries);

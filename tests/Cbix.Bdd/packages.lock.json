@@ -489,7 +489,8 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.AI.Abstractions": "[10.9.0, )",
-          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
+          "PdfPig": "[0.1.15, )"
         }
       },
       "cbix.providers.anthropic": {
@@ -506,6 +507,7 @@
         "type": "Project",
         "dependencies": {
           "Cbix.Core": "[1.0.0, )",
+          "Cbix.Providers.Anthropic": "[1.0.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -608,6 +610,12 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
         }
+      },
+      "PdfPig": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.15, )",
+        "resolved": "0.1.15",
+        "contentHash": "Bf0NO4o2ZSVnemMyj21KDU1sfSgmamFC0pD4aAv19CDNXQsoO1Z6O99gNqpiK/XWWZ5d5i7JkQoT7PUBxEPz5g=="
       },
       "Xunit.SkippableFact": {
         "type": "CentralTransitive",

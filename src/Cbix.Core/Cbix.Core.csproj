@@ -14,6 +14,10 @@
     <!-- Logging abstractions, not a logging implementation: Core emits structured security events
          (ingest refusals) and leaves every sink choice to the host. -->
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- Local PDF parsing for the ingest text layer (design 5.1). Offline and provider-neutral:
+         the grounding corpus is the same under every provider profile. See the rationale on the
+         PackageVersion entry in /Directory.Packages.props. -->
+    <PackageReference Include="PdfPig" />
   </ItemGroup>
 
 </Project>

@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Cbix.Core.Ingest;
 
 /// <summary>
@@ -89,12 +91,15 @@ internal static class PathBoundary
     public static bool IsUnder(string root, string path) =>
         path.StartsWith(ContainmentPrefix(root), PathComparison);
 
-    /// <summary>Maximum length of a path rendered into a log event.</summary>
+    /// <summary>Maximum length of the path prefix rendered into a log event.</summary>
     private const int MaxLoggedPathLength = 400;
 
+    /// <summary>Suffix marking a path that was cut short, so a short rendering is never mistaken for a short path.</summary>
+    private const string TruncationMarker = "...[truncated]";
+
     /// <summary>
-    /// Renders a path safely for a log event: control and Unicode format characters replaced, length
-    /// bounded.
+    /// Renders a path safely for a log event: control, Unicode format and surrogate characters
+    /// replaced, length bounded.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -106,38 +111,89 @@ internal static class PathBoundary
     /// carefully: the event is the control that monitors the ingest share's write restriction.
     /// </para>
     /// <para>
+    /// <b>Surrogates are replaced wherever they appear, not merely where truncation could split
+    /// them.</b> A lone surrogate is not a character: it renders as a replacement glyph at best, and
+    /// at worst breaks the encoder in whichever sink receives it - turning a security event into a
+    /// lost one. That hazard belongs to the character, not to the truncation boundary: a path
+    /// containing an unpaired surrogate anywhere carries it, and .NET strings admit one happily
+    /// because they are UTF-16 code units rather than text. Replacing on the category is therefore
+    /// the whole fix, and it makes the old back-off-one-character-before-cutting-a-pair dance
+    /// unnecessary - which is why that code is gone rather than kept alongside.
+    /// </para>
+    /// <para>
+    /// The cost, stated: a <em>well-formed</em> surrogate pair - an emoji, a CJK extension character,
+    /// anything outside the Basic Multilingual Plane - has both halves replaced, so a legitimate
+    /// astral-plane file name renders as two replacement characters. That is accepted deliberately.
+    /// The alternative is pair-aware scanning that admits exactly the code units this method exists
+    /// to neutralise, in return for prettier rendering of a path that is, by construction, being
+    /// logged because a submission was refused. A path full of replacement characters is a strong
+    /// signal about that submission, which is the job.
+    /// </para>
+    /// <para>
     /// The value is replaced, never dropped: an operator needs to see that something was there, and
     /// a replacement character in an alert is itself a strong signal about the submission.
     /// </para>
     /// </remarks>
     public static string ForLog(string path)
     {
-        int length = path.Length > MaxLoggedPathLength ? MaxLoggedPathLength : path.Length;
-
-        // Back off one character rather than cut a surrogate pair in half. A lone high surrogate is
-        // not a character: it renders as a replacement glyph at best, and at worst breaks the
-        // encoder in whichever sink receives it - turning a truncated path into a lost security
-        // event.
-        if (length > 0 && length < path.Length && char.IsHighSurrogate(path[length - 1]))
+        if (path.Length <= MaxLoggedPathLength)
         {
-            length--;
+            return string.Create(path.Length, path, static (destination, original) => Sanitise(destination, original));
         }
 
-        ReadOnlySpan<char> source = path.AsSpan(0, length);
-
-        return string.Create(source.Length, path, static (destination, original) =>
-        {
-            for (int index = 0; index < destination.Length; index++)
+        // A truncated path that does not say it was truncated is a path an operator will read as
+        // complete - and then compare, fruitlessly, against a real name on the share. The marker
+        // costs one suffix and removes that whole class of wasted investigation. It is appended after
+        // sanitisation of the kept prefix, so nothing in the input can forge it.
+        return string.Create(
+            MaxLoggedPathLength + TruncationMarker.Length,
+            path,
+            static (destination, original) =>
             {
-                char character = original[index];
-
-                destination[index] = char.IsControl(character)
-                    || char.GetUnicodeCategory(character) == System.Globalization.UnicodeCategory.Format
-                        ? '�'
-                        : character;
-            }
-        });
+                Sanitise(destination[..MaxLoggedPathLength], original);
+                TruncationMarker.CopyTo(destination[MaxLoggedPathLength..]);
+            });
     }
+
+    /// <summary>Copies <paramref name="original"/> into <paramref name="destination"/>, replacing what must not be rendered.</summary>
+    private static void Sanitise(Span<char> destination, string original)
+    {
+        for (int index = 0; index < destination.Length; index++)
+        {
+            char character = original[index];
+
+            destination[index] = IsUnsafeToRender(character) ? '�' : character;
+        }
+    }
+
+    /// <summary>
+    /// Reports whether a character must not reach a log sink as itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Four categories, each for its own reason: control characters forge log entries; format
+    /// characters (U+202E and friends) are invisible and reorder what a human reads; surrogates are
+    /// not characters at all and can break the sink's encoder; and the Unicode line and paragraph
+    /// separators end a line for a great many consumers.
+    /// </para>
+    /// <para>
+    /// <b>U+2028 and U+2029 are the same attack as CR/LF, wearing a different code point.</b> They
+    /// are not <see cref="char.IsControl(char)"/>, so the obvious predicate misses them entirely -
+    /// and they terminate a line in JavaScript source, in a browser rendering a log viewer, and in
+    /// any NDJSON consumer that splits on Unicode line boundaries rather than on <c>\n</c> alone.
+    /// Measured: a file named <c>report&lt;U+2028&gt;INFO: admin authorised.pdf</c> passed both this
+    /// sanitiser and <c>DocumentReference</c>'s name rules, which is a forged log line delivered
+    /// through a file name. Both places reject them now; the rules have to agree, because a name the
+    /// reference admits is a name this method will eventually be asked to render.
+    /// </para>
+    /// </remarks>
+    private static bool IsUnsafeToRender(char character) =>
+        char.IsControl(character)
+        || char.GetUnicodeCategory(character)
+            is UnicodeCategory.Format
+            or UnicodeCategory.Surrogate
+            or UnicodeCategory.LineSeparator
+            or UnicodeCategory.ParagraphSeparator;
 
     /// <summary>
     /// Reports whether a character is a slash of either kind, judged as a character rather than as
