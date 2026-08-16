@@ -1,23 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- TargetFramework, Nullable, ImplicitUsings, LangVersion and
-       TreatWarningsAsErrors come from /Directory.Build.props. -->
+  <!-- Solution-wide settings come from /Directory.Build.props.
+       Shared test-stack packages and test-only overrides come from
+       /tests/Directory.Build.props. Package versions come from
+       /Directory.Packages.props (CPM). -->
   <PropertyGroup>
     <RootNamespace>Cbix.UnitTests</RootNamespace>
     <AssemblyName>Cbix.UnitTests</AssemblyName>
-    <IsPackable>false</IsPackable>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="coverlet.collector" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Using Include="Xunit" />
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cbix.Core\Cbix.Core.csproj" />

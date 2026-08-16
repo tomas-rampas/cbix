@@ -14,6 +14,6 @@ public sealed class CoreAssemblyTests
     {
         Assembly core = Assembly.Load(new AssemblyName("Cbix.Core"));
 
-        Assert.NotNull(core);
+        Assert.Equal("Cbix.Core", core.GetName().Name);
     }
 }

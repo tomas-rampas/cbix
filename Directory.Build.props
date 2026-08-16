@@ -12,7 +12,34 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisModeSecurity>All</AnalysisModeSecurity>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <!--
+    Lock files are only a reproducibility control if restore is forbidden to rewrite
+    them. A plain `dotnet restore` silently updates packages.lock.json and exits 0;
+    only locked mode fails (NU1004) when the lock file no longer matches the project.
+    Enforced on CI alone: a developer adding a package locally must still be able to
+    restore, and CI is where "the lock file is authoritative" has to be true.
+    CI sets ContinuousIntegrationBuild=true (story S01-03).
+  -->
+  <PropertyGroup>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+
+  <!--
+    NuGet vulnerability advisories (NU1901 low .. NU1904 critical) must NOT be errors
+    here. With TreatWarningsAsErrors they hard-break every developer build the moment
+    a new advisory is published against any transitive package, at a time nobody
+    chose, on code nobody touched. Advisory response is a scheduled decision, not a
+    random interrupt in the middle of unrelated work.
+    They are not being ignored: S01-03 adds a dedicated CI audit step that fails the
+    pipeline on advisories, which is the right place for a time-varying gate.
+  -->
+  <PropertyGroup>
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
   <!--

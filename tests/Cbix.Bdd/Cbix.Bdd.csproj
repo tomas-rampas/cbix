@@ -1,29 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- TargetFramework, Nullable, ImplicitUsings, TreatWarningsAsErrors and
-       AnalysisModeSecurity come from /Directory.Build.props.
-       Package versions come from /Directory.Packages.props (CPM). -->
+  <!-- Solution-wide settings come from /Directory.Build.props.
+       Shared test-stack packages, GenerateDocumentationFile=false and
+       ReqnrollUseIntermediateOutputPathForCodeBehind come from
+       /tests/Directory.Build.props. Package versions come from
+       /Directory.Packages.props (CPM). -->
   <PropertyGroup>
     <RootNamespace>Cbix.Bdd</RootNamespace>
     <AssemblyName>Cbix.Bdd</AssemblyName>
-    <IsPackable>false</IsPackable>
-    <!-- Emit the generated *.feature.cs code-behind into obj/ instead of next to the
-         .feature file. Reqnroll defaults this to false purely for backward
-         compatibility and plans to flip it in v4; without it, generated build output
-         lands in Features/ and is offered up for commit. -->
-    <ReqnrollUseIntermediateOutputPathForCodeBehind>true</ReqnrollUseIntermediateOutputPathForCodeBehind>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <!-- Only the BDD project needs Reqnroll. -->
     <PackageReference Include="Reqnroll.xUnit" />
-    <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Using Include="Xunit" />
   </ItemGroup>
 
   <ItemGroup>

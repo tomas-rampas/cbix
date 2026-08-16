@@ -1,0 +1,57 @@
+<Project>
+
+  <!--
+    Test-project defaults. MSBuild stops at the FIRST Directory.Build.props found
+    walking up from a project, so this file must import the repo-root one explicitly
+    or every solution-wide setting would silently vanish for tests.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!--
+      Test assemblies ship no public API, so requiring XML doc comments on them would
+      be pure ceremony. The obvious way to express that is GenerateDocumentationFile=
+      false - but that ALSO silently disables IDE0005 (unnecessary usings) on build,
+      and Roslyn hard-errors rather than degrading quietly:
+        "error EnableGenerateDocumentationFile: Set MSBuild property
+         'GenerateDocumentationFile' to 'true' ... to enable IDE0005 ... on build"
+        (dotnet/roslyn#41640)
+      So keep doc-file generation ON to keep the style gate real, and switch off the
+      one warning that would otherwise demand doc comments. Net effect: IDE0005 is
+      enforced everywhere; nobody writes /// on a test class.
+    -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      Lives here rather than in Cbix.Bdd.csproj so it applies structurally to every
+      current and future test project. Emitting Reqnroll's generated *.feature.cs into
+      obj/ instead of next to the .feature file keeps generated build output out of
+      the working tree; a project that forgot the property would offer it for commit.
+      Harmless for test projects that do not use Reqnroll: with no ReqnrollFeatureFile
+      items and no Reqnroll targets imported, nothing reads it.
+    -->
+    <ReqnrollUseIntermediateOutputPathForCodeBehind>true</ReqnrollUseIntermediateOutputPathForCodeBehind>
+  </PropertyGroup>
+
+  <!--
+    The shared test stack. Consolidated here because the per-project blocks were
+    byte-identical and the project count grows every sprint; a single list is one
+    place to bump a version and makes a project that deviates obvious.
+    Reqnroll stays in Cbix.Bdd.csproj: only the BDD project needs it.
+  -->
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

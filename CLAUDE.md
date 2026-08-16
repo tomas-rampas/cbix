@@ -11,8 +11,12 @@ Commands (run from the repo root):
 ```
 dotnet build Cbix.sln                      # must end 0 Warning(s), 0 Error(s) — warnings are errors
 dotnet test  Cbix.sln                      # runs both test projects (unit + BDD)
-dotnet format Cbix.sln --verify-no-changes # formatter gate (.editorconfig-backed); run before committing
+dotnet format Cbix.sln --verify-no-changes # whitespace gate; run before committing
 ```
+
+Style rules are enforced by the **build**, not the formatter: `EnforceCodeStyleInBuild=true` plus rules elevated to `warning` in `.editorconfig` become hard failures under warnings-as-errors. `dotnet format --verify-no-changes` only checks whitespace.
+
+Composition root: the workflow graph and DI wiring live in `Cbix.Core` so tests (including S01-09's stub-client agnosticism run) exercise the real composition without the executable; `src/Cbix.Worker` stays a thin host that boots the host builder and invokes that composition.
 
 Secrets (e.g. `ANTHROPIC_API_KEY`) come from user-secrets or environment variables only — never `launchSettings.json`, `appsettings*.json`, or any other tracked file. `**/Properties/launchSettings.json` is gitignored for exactly this reason.
 

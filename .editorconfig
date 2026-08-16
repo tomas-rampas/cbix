@@ -65,7 +65,7 @@ dotnet_style_require_accessibility_modifiers = for_non_interface_members:silent
 dotnet_style_coalesce_expression = true:suggestion
 dotnet_style_collection_initializer = true:suggestion
 dotnet_style_explicit_tuple_names = true:suggestion
-dotnet_style_namespace_match_folder = true:suggestion
+dotnet_style_namespace_match_folder = true:warning
 dotnet_style_null_propagation = true:suggestion
 dotnet_style_object_initializer = true:suggestion
 dotnet_style_operator_placement_when_wrapping = beginning_of_line
@@ -129,7 +129,7 @@ csharp_style_prefer_readonly_struct_member = true:suggestion
 # Code-block preferences
 csharp_prefer_braces = true:silent
 csharp_prefer_simple_using_statement = true:suggestion
-csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_style_namespace_declarations = file_scoped:warning
 csharp_style_prefer_method_group_conversion = true:silent
 csharp_style_prefer_primary_constructors = true:suggestion
 csharp_style_prefer_top_level_statements = true:silent
@@ -390,3 +390,31 @@ dotnet_naming_style.s_camelcase.required_suffix =
 dotnet_naming_style.s_camelcase.word_separator = 
 dotnet_naming_style.s_camelcase.capitalization = camel_case
 
+
+##########################################################################
+# CBIX enforced rule set
+#
+# EnforceCodeStyleInBuild=true (in /Directory.Build.props) only makes IDE
+# analyzers run during build; it does not by itself make any of them fail.
+# A severity of `suggestion` or `silent` is invisible to both `dotnet build`
+# and `dotnet format --verify-no-changes`. The rules below are raised to
+# `warning`, which TreatWarningsAsErrors then turns into build errors - so
+# this short list is the style contract that is actually enforced, as
+# opposed to the several hundred defaults above that are advisory only.
+#
+# Keep this list small and high-signal. Every entry here can break a build.
+##########################################################################
+[*.cs]
+
+# Unnecessary using directives. Dead usings hide real coupling and make
+# "what does this file actually depend on" unanswerable at a glance.
+dotnet_diagnostic.IDE0005.severity = warning
+
+# File-scoped namespaces (the `namespace X;` form). Paired with the
+# csharp_style_namespace_declarations preference above.
+dotnet_diagnostic.IDE0161.severity = warning
+
+# Namespace must match folder structure. Paired with the
+# dotnet_style_namespace_match_folder preference above. Matters here because
+# later stories add many small contract/executor types across nested folders.
+dotnet_diagnostic.IDE0130.severity = warning

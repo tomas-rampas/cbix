@@ -35,6 +35,7 @@ Feature: Solution scaffolding
 Done means:
 - Solution layout: `src/Cbix.Worker`, `src/Cbix.Core` (contracts/executors), `tests/Cbix.UnitTests`, `tests/Cbix.Bdd` (Reqnroll).
 - `CLAUDE.md` updated with the real build/test commands (it currently states none exist).
+- Bootstrap exemption (recorded): roadmap DoD item 1 — failing Reqnroll scenario first — is waived for this story only, because the Reqnroll harness it presupposes is itself delivered by S01-02. Acceptance was proven by direct execution instead (build/test/format exit codes). No other story inherits this exemption.
 
 ---
 
@@ -84,6 +85,10 @@ Feature: CI skeleton
 
 Done means:
 - No Azure-hosted CI service used for anything that would violate the no-Azure constraint on the runtime platform; CI tooling itself (e.g. GitHub Actions) is acceptable since it is build infrastructure, not part of the deployed system — noted explicitly in the pipeline file's header comment to avoid future confusion.
+- Restore runs locked: the pipeline sets `ContinuousIntegrationBuild=true` (activating the CI-conditional `RestoreLockedMode` in `Directory.Build.props`) or passes `--locked-mode` explicitly — committed `packages.lock.json` files are only a control when restore is locked.
+- A dedicated dependency-audit step hard-fails on known-vulnerable packages (`dotnet list package --vulnerable --include-transitive`); NU190x audit warnings are excluded from warnings-as-errors locally precisely so advisories surface here, actionably, instead of breaking developer builds at random times.
+- `REQNROLL_TELEMETRY_ENABLED=0` exported at job level — covers the build-time telemetry path that the checked-in `.runsettings` (test-run scope) cannot reach.
+- `dotnet format Cbix.sln --verify-no-changes` runs as a pipeline step.
 
 ---
 
