@@ -1,0 +1,890 @@
+{
+  "_meta": {
+    "purpose": "Expected structured extraction for the per-country CBTI specimen PDFs (DE, CH)",
+    "note": "Values match the PDFs exactly. permission_matrix is pre-flattened to one record per (country, product, client_category) - the natural relational shape. Client category schemes intentionally differ (MiFID II vs FinSA) to test normalisation.",
+    "status_codes": {
+      "P": "Permitted",
+      "PR": "Permitted with restrictions",
+      "RS": "Reverse solicitation / passive only",
+      "NP": "Not permitted",
+      "N/A": "Not applicable"
+    },
+    "suggested_relational_tables": {
+      "country_documents": "PK doc_ref; country_iso, version, dates, owner",
+      "entities": "PK (doc_ref, entity)",
+      "permission_matrix": "PK (doc_ref, product, client_category); status_code; condition_refs as link table",
+      "conditions": "PK (doc_ref, condition_ref)",
+      "marketing_rules": "PK (doc_ref, seq)",
+      "version_history": "PK (doc_ref, version)"
+    }
+  },
+  "country_documents": [
+    {
+      "country": "Federal Republic of Germany",
+      "iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "version": "3.2",
+      "status": "Approved",
+      "effective_date": "2026-08-16",
+      "review_date": "2027-08-15",
+      "supersedes": "CBTI-DE-2023-007 (v3.1)",
+      "owner": "Legal - Cross-Border Trading Office, EMEA",
+      "key_legislation": "KWG (Banking Act); WpHG (Securities Trading Act); WpIG (Investment Firm Act); MiFID II / MiFIR; EMIR; PRIIPs Regulation; AIFMD Art. 42 (NPPR); GwG (AML Act)",
+      "categorisation_note": "Client categories follow Sec. 67 WpHG (MiFID II): eligible counterparties, per-se professional clients, elective professional clients and retail clients. The matrix below applies to cross-border activity by Contoso Bank PLC, London. Activity by Contoso Bank Europe PLC under its EU passport is not restricted by this matrix and is governed by document CBTI-EEA-2026-001.",
+      "tax": "Dividend withholding tax of 26.375% (25% plus solidarity surcharge) applies at source; relief to treaty rates is available via relief-at-source or reclaim (see Group Tax country card TAX-DE-09). No financial transaction tax is currently in force. Fund investments fall within the scope of the German Investment Tax Act (InvStG)."
+    },
+    {
+      "country": "Swiss Confederation",
+      "iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "version": "2.3",
+      "status": "Approved",
+      "effective_date": "2026-08-16",
+      "review_date": "2027-08-15",
+      "supersedes": "CBTI-CH-2024-004 (v2.2)",
+      "owner": "Legal - Cross-Border Trading Office, EMEA",
+      "key_legislation": "FinSA / FIDLEG (Financial Services Act); FinIA (Financial Institutions Act); CISA (Collective Investment Schemes Act); FMIA / FinfraG (Market Infrastructure Act); Swiss Banking Act",
+      "categorisation_note": "Client segmentation follows FinSA Art. 4: institutional clients, professional clients and retail (private) clients. Note the categories do NOT map one-to-one to MiFID II; opting out / opting in per FinSA Art. 5 must be documented. The matrix applies to cross-border activity by Contoso Bank PLC, London into Switzerland.",
+      "tax": "Swiss withholding tax of 35% applies to Swiss-source dividends and certain interest; relief via reclaim under the applicable double tax treaty (see Group Tax country card TAX-CH-06). Swiss transfer stamp tax (Umsatzabgabe) of up to 0.15% (domestic) / 0.30% (foreign securities) may apply where a Swiss securities dealer is a party or intermediary to the transaction."
+    }
+  ],
+  "entities": [
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "entity": "Contoso Bank Europe PLC, Frankfurt Branch",
+      "legal_basis": "EU passport (CRD IV / MiFID II) - branch established with BaFin notification",
+      "scope": "Full scope of passported investment services; primary booking and client-facing entity for EEA clients"
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "entity": "Contoso Bank PLC, London",
+      "legal_basis": "Third-country firm - BaFin exemption order under Sec. 2(5) KWG dated 12 March 2021",
+      "scope": "Institutional business only, strictly per the permission matrix in Section 4"
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "entity": "Contoso Bank (Suisse) SA, Geneva",
+      "legal_basis": "Locally licensed Swiss bank (FINMA)",
+      "scope": "Domestic Swiss business - out of scope of this Instruction; see CH domestic manual"
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "entity": "Contoso Bank PLC, London",
+      "legal_basis": "Foreign financial service provider under FinSA - no Swiss licence; relies on FinSA exemptions and client adviser registration regime",
+      "scope": "Cross-border services strictly per the permission matrix in Section 4"
+    }
+  ],
+  "permission_matrix": [
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Professional (per se)",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Professional (elective)",
+      "status_code": "PR",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Professional (per se)",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Professional (elective)",
+      "status_code": "PR",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Professional (per se)",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Professional (elective)",
+      "status_code": "PR",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": [
+        1,
+        3
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Professional (per se)",
+      "status_code": "P",
+      "condition_refs": [
+        1,
+        3
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Professional (elective)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": [
+        1,
+        3
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Professional (per se)",
+      "status_code": "PR",
+      "condition_refs": [
+        3
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Professional (elective)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "FX - spot & forwards",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "FX - spot & forwards",
+      "client_category": "Professional (per se)",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "FX - spot & forwards",
+      "client_category": "Professional (elective)",
+      "status_code": "PR",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "FX - spot & forwards",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Eligible Counterparty",
+      "status_code": "PR",
+      "condition_refs": [
+        4
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Professional (per se)",
+      "status_code": "PR",
+      "condition_refs": [
+        4
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Professional (elective)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Eligible Counterparty",
+      "status_code": "PR",
+      "condition_refs": [
+        5
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Professional (per se)",
+      "status_code": "PR",
+      "condition_refs": [
+        5
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Professional (elective)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Investment advice - cross-border",
+      "client_category": "Eligible Counterparty",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Investment advice - cross-border",
+      "client_category": "Professional (per se)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Investment advice - cross-border",
+      "client_category": "Professional (elective)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "Investment advice - cross-border",
+      "client_category": "Retail",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "ECM / DCM origination services",
+      "client_category": "Eligible Counterparty",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "ECM / DCM origination services",
+      "client_category": "Professional (per se)",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "ECM / DCM origination services",
+      "client_category": "Professional (elective)",
+      "status_code": "N/A",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "product": "ECM / DCM origination services",
+      "client_category": "Retail",
+      "status_code": "N/A",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Professional",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Cash equities - execution & dealing",
+      "client_category": "Retail (private)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Professional",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Government bonds - execution & dealing",
+      "client_category": "Retail (private)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Professional",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Corporate bonds & credit - execution & dealing",
+      "client_category": "Retail (private)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Professional",
+      "status_code": "P",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "OTC derivatives - cleared",
+      "client_category": "Retail (private)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Professional",
+      "status_code": "PR",
+      "condition_refs": [
+        2
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "OTC derivatives - uncleared",
+      "client_category": "Retail (private)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "FX - spot & forwards",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "FX - spot & forwards",
+      "client_category": "Professional",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "FX - spot & forwards",
+      "client_category": "Retail (private)",
+      "status_code": "RS",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": [
+        3
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Professional",
+      "status_code": "PR",
+      "condition_refs": [
+        3
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Structured products & notes - distribution",
+      "client_category": "Retail (private)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": [
+        4
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Professional",
+      "status_code": "PR",
+      "condition_refs": [
+        4
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Fund units (UCITS / AIF) - distribution",
+      "client_category": "Retail (private)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Investment advice - cross-border",
+      "client_category": "Institutional",
+      "status_code": "PR",
+      "condition_refs": [
+        5
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Investment advice - cross-border",
+      "client_category": "Professional",
+      "status_code": "PR",
+      "condition_refs": [
+        5
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "Investment advice - cross-border",
+      "client_category": "Retail (private)",
+      "status_code": "NP",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "ECM / DCM origination services",
+      "client_category": "Institutional",
+      "status_code": "P",
+      "condition_refs": []
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "ECM / DCM origination services",
+      "client_category": "Professional",
+      "status_code": "P",
+      "condition_refs": [
+        1
+      ]
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "product": "ECM / DCM origination services",
+      "client_category": "Retail (private)",
+      "status_code": "N/A",
+      "condition_refs": []
+    }
+  ],
+  "conditions": [
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "condition_ref": 1,
+      "text": "Conducted by Contoso Bank PLC in reliance on the BaFin exemption order under Sec. 2(5) KWG (12 March 2021); available to institutional clients only and subject to the conditions of that order."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "condition_ref": 2,
+      "text": "Elective professional clients require a completed opt-up assessment under Sec. 67(6) WpHG and enhanced appropriateness records before the first transaction."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "condition_ref": 3,
+      "text": "EMIR applies: LEI, ISDA Master Agreement and, for uncleared trades, CSA / initial margin documentation must be in place; German FC / NFC+ counterparties are subject to clearing and reporting obligations."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "condition_ref": 4,
+      "text": "A PRIIPs KID must be available before distribution; a German-language KID is required for any offer capable of reaching retail investors."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "condition_ref": 5,
+      "text": "AIF marketing only under Art. 42 AIFMD national private placement following notification to BaFin; UCITS require a completed marketing passport notification."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "condition_ref": 1,
+      "text": "Client advisers servicing Swiss professional clients must be entered in a Swiss client adviser register unless exempt under FinSA Art. 28 as employees of a prudentially supervised foreign institution serving professional / institutional clients only."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "condition_ref": 2,
+      "text": "FMIA obligations apply: reporting to a Swiss trade repository and, where applicable, clearing; ISDA or Swiss Master Agreement required."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "condition_ref": 3,
+      "text": "Structured products may be offered to professional clients under FinSA Art. 36 prospectus exemptions; retail distribution would require a FinSA prospectus and KID and is not approved."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "condition_ref": 4,
+      "text": "Collective investment schemes restricted to qualified investors under CISA Art. 10; a Swiss representative and paying agent are required for distribution to non-institutional qualified investors."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "condition_ref": 5,
+      "text": "Cross-border advice only on a documented reverse-enquiry basis or where condition (1) is satisfied; affiliation with a recognised Swiss ombudsman (FinSA Art. 74) has been confirmed for Contoso Bank PLC."
+    }
+  ],
+  "marketing_rules": [
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "seq": 1,
+      "rule": "No cold calling of prospective clients (Sec. 7 UWG); contact requires prior consent or an existing relationship."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "seq": 2,
+      "rule": "In-country visits by Contoso Bank PLC (London) staff are limited to institutional prospects and must be logged in the Cross-Border Travel Tool before travel."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "seq": 3,
+      "rule": "Client-facing meetings with EEA retail or elective professional clients must be led by Contoso Bank Europe PLC, Frankfurt."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "seq": 4,
+      "rule": "Marketing materials must carry approved disclaimer LEG-DE-DISC-04 and may not be addressed to retail investors."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "seq": 5,
+      "rule": "Events and roadshows in Germany require Legal sign-off at least 10 business days in advance."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "seq": 1,
+      "rule": "In-country travel is permitted for institutional and professional prospects; advisers must satisfy condition (1) before any client-facing activity."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "seq": 2,
+      "rule": "All financial promotions must state the ombudsman affiliation and carry approved disclaimer LEG-CH-DISC-02."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "seq": 3,
+      "rule": "No public advertising of financial instruments to retail (private) clients; materials must state their professional / institutional-only scope."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "seq": 4,
+      "rule": "Third-party introducers require a written finder agreement approved by Legal & Compliance."
+    }
+  ],
+  "version_history": [
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "version": "1.0",
+      "date": "2018-05-04",
+      "owner": "Cross-Border Office",
+      "summary": "Initial issue."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "version": "2.0",
+      "date": "2021-03-12",
+      "owner": "Cross-Border Office",
+      "summary": "Post-Brexit restructure: CBE passporting; CBPLC Sec. 2(5) KWG exemption."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "version": "3.0",
+      "date": "2023-09-30",
+      "owner": "Cross-Border Office",
+      "summary": "WpIG update; matrix extended to fund distribution."
+    },
+    {
+      "country_iso": "DE",
+      "doc_ref": "CBTI-DE-2026-011",
+      "version": "3.2",
+      "date": "2026-08-16",
+      "owner": "Cross-Border Office",
+      "summary": "Annual review; matrix refresh; marketing rules updated."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "version": "1.0",
+      "date": "2019-06-14",
+      "owner": "Cross-Border Office",
+      "summary": "Initial issue."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "version": "2.0",
+      "date": "2022-01-31",
+      "owner": "Cross-Border Office",
+      "summary": "FinSA transition complete: adviser registration and ombudsman affiliation reflected."
+    },
+    {
+      "country_iso": "CH",
+      "doc_ref": "CBTI-CH-2026-008",
+      "version": "2.3",
+      "date": "2026-08-16",
+      "owner": "Cross-Border Office",
+      "summary": "Annual review; stamp tax note updated."
+    }
+  ]
+}
