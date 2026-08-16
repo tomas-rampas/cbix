@@ -116,7 +116,7 @@ Done means:
 
 ---
 
-### [ ] S01-05 — Claude document-content profile (Files API + cache_control)
+### [x] S01-05 — Claude document-content profile (Files API + cache_control)
 
 As the pipeline
 I want the Claude profile of `IDocumentContentProvider` to upload a document once to the Claude Files API and reference it by `file_id` with `cache_control` set
@@ -146,7 +146,7 @@ Done means:
 
 ---
 
-### [ ] S01-06 — Generic-vision document-content profile
+### [x] S01-06 — Generic-vision document-content profile
 
 As the pipeline
 I want a provider-agnostic fallback profile that sends the PDFPig text layer plus locally rendered page images as ordinary multimodal content
@@ -170,7 +170,7 @@ Done means: profile is selected purely by the active provider's capability profi
 
 ---
 
-### [ ] S01-07 — Text-only document-content profile flags degraded mode
+### [x] S01-07 — Text-only document-content profile flags degraded mode
 
 As the pipeline
 I want a text-only fallback profile that sends only the PDFPig text layer, with an explicit degraded-mode flag on its output
