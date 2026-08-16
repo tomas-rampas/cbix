@@ -400,6 +400,86 @@ public sealed class DocumentIngestServiceTests : IDisposable
         AssertNothingWasAdmitted();
     }
 
+    [Fact]
+    public async Task IngestAsync_PercentEncodedDotSegmentInThePath_IsRefusedAsUnrepresentable()
+    {
+        // Measured: new Uri(@"C:\ingest\%2e%2e\evil.pdf").LocalPath is "C:\evil.pdf". The bytes hashed
+        // were the real file inside the root; the location recorded named a different file outside
+        // it. A percent sign is an ordinary character in a file name, so this is a drop share doing
+        // something normal, not an exotic attack.
+        string encodedDirectory = Directory.CreateDirectory(Path.Combine(_ingestRoot, "%2e%2e")).FullName;
+        string documentPath = WriteDocument(encodedDirectory, "evil.pdf", "cross-border instruction");
+
+        IngestRootViolationException refusal = await Assert.ThrowsAsync<IngestRootViolationException>(
+            () => Service().IngestAsync(documentPath));
+
+        Assert.Equal(IngestRootViolationReason.UnrepresentableLocation, refusal.Reason);
+        AssertNothingWasAdmitted();
+        AssertRefusalWasLogged();
+    }
+
+    [Fact]
+    public async Task IngestAsync_PercentEncodedCharacterInTheLeafName_IsRefusedAsUnrepresentable()
+    {
+        // Measured: new Uri(@"C:\ingest\annex%41.pdf").LocalPath is "C:\ingest\annexA.pdf" - a file
+        // that does not exist. The digest would have described one file and the provenance another.
+        string documentPath = WriteDocument(_ingestRoot, "annex%41.pdf", "cross-border instruction");
+
+        IngestRootViolationException refusal = await Assert.ThrowsAsync<IngestRootViolationException>(
+            () => Service().IngestAsync(documentPath));
+
+        Assert.Equal(IngestRootViolationReason.UnrepresentableLocation, refusal.Reason);
+        Assert.Equal(documentPath, refusal.ResolvedPath);
+        AssertNothingWasAdmitted();
+    }
+
+    [Fact]
+    public async Task IngestAsync_RecordedLocation_NamesTheFileWhoseBytesWereHashed()
+    {
+        // The contract S01-05 uploads from: Location.LocalPath is resolved, contained, and renders
+        // back to exactly the hashed path. The name carries a space and parentheses so the URI layer
+        // has something to escape - an all-alphanumeric name would satisfy this assertion no matter
+        // how the location was built.
+        string documentPath = WriteDocument(_ingestRoot, "DE SPECIMEN (v2).pdf", "cross-border instruction");
+
+        DocumentIngestResult result = await Service().IngestAsync(documentPath);
+
+        Assert.Equal(documentPath, result.Submitted.Location.LocalPath);
+        Assert.StartsWith(_ingestRoot + Path.DirectorySeparatorChar, result.Submitted.Location.LocalPath, StringComparison.Ordinal);
+        Assert.Equal(
+            Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(result.Submitted.Location.LocalPath))),
+            result.ContentHash.Value);
+    }
+
+    [Fact]
+    public async Task IngestAsync_RefusalOfAHostilePath_NeitherLogsNorReportsItVerbatim()
+    {
+        // Log injection and message disclosure, pinned. The CR/LF forges a second log entry; U+202E
+        // (RIGHT-TO-LEFT OVERRIDE) makes a name render as something else entirely to whoever reads
+        // the alert. A UNC prefix is used so the refusal is decided on the raw string, which keeps
+        // this test about sanitisation rather than about path resolution.
+        const string Hostile = "\\\\attacker.example\\share\\eve\r\nfake\u202Efdp.exe";
+
+        IngestRootViolationException refusal = await Assert.ThrowsAsync<IngestRootViolationException>(
+            () => Service().IngestAsync(Hostile));
+
+        string logged = Assert.Single(_logger.Entries).Message;
+
+        Assert.DoesNotContain('\r', logged);
+        Assert.DoesNotContain('\n', logged);
+        Assert.DoesNotContain('\u202E', logged);
+
+        // Replaced, not dropped: an operator has to see that something was removed.
+        Assert.Contains('\uFFFD', logged);
+
+        // The exception message is reason-derived, so nothing attacker-supplied travels in it.
+        Assert.DoesNotContain("attacker", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("fdp.exe", refusal.Message, StringComparison.Ordinal);
+
+        // The unmodified path stays available on the typed property, for code rather than for logs.
+        Assert.Equal(Hostile, refusal.SubmittedPath);
+    }
+
     // ---------------------------------------------------------------- not-a-document outcomes
 
     [Fact]
@@ -473,10 +553,35 @@ public sealed class DocumentIngestServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task IngestAsync_MissingFile_Throws()
+    public async Task IngestAsync_MissingFile_ThrowsAndLogsAStructuredEvent()
     {
         await Assert.ThrowsAsync<FileNotFoundException>(() => Service().IngestAsync("absent.pdf"));
 
+        // A failure this service did not decide still has to leave a trace: the exception type alone,
+        // because the BCL message embeds the path unsanitised.
+        (LogLevel Level, string Message) logged = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Error, logged.Level);
+        Assert.Contains(nameof(FileNotFoundException), logged.Message, StringComparison.Ordinal);
+        AssertNothingWasAdmitted();
+    }
+
+    [Fact]
+    public async Task IngestAsync_LeafNameThatCannotConstructAReference_IsRefusedBeforeReading()
+    {
+        // DocumentReference rejects a control character in a display name. Checking the name before
+        // opening means a document that can never be accepted does not first pay for a full read and
+        // hash; the reference constructor stays the backstop.
+        // The control character is written as an escape, never pasted in: an invisible character in
+        // a source file is unreviewable, and this one was silently stripped in transit once already
+        // while this test was being written.
+        string documentPath = Path.Combine(_ingestRoot, "annex" + (char)0x07 + "bell.pdf");
+
+        // The file deliberately does not exist: if the name check did not run first, the failure
+        // would be FileNotFoundException from the open rather than a rejection of the name.
+        ArgumentException error = await Assert.ThrowsAsync<ArgumentException>(
+            () => Service().IngestAsync(documentPath));
+
+        Assert.Equal("fileName", error.ParamName);
         AssertNothingWasAdmitted();
     }
 

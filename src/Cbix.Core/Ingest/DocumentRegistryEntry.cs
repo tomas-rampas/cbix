@@ -81,7 +81,13 @@ public sealed record DocumentRegistryEntry
         // database rather than by a test.
         RejectOverlongValue(document.FileName, MaxFileNameLength, "file name");
         RejectOverlongValue(document.MediaType, MaxMediaTypeLength, "media type");
-        RejectOverlongValue(document.Location.OriginalString, MaxLocationLength, "source location");
+
+        // LocalPath, because the resolved OS path is the rendering source_location stores - the
+        // registry records where the bytes were read from, in the form an operator or a provider
+        // would use to read them again. For anything ingest built, this is the same string as
+        // OriginalString: the service refuses a document whose Uri does not render back to exactly
+        // the resolved path, so the two agree by construction rather than by luck.
+        RejectOverlongValue(document.Location.LocalPath, MaxLocationLength, "source location");
 
         if (firstSeenUtc.Offset != TimeSpan.Zero)
         {

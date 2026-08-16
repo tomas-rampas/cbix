@@ -112,9 +112,18 @@ internal static class PathBoundary
     /// </remarks>
     public static string ForLog(string path)
     {
-        ReadOnlySpan<char> source = path.Length > MaxLoggedPathLength
-            ? path.AsSpan(0, MaxLoggedPathLength)
-            : path;
+        int length = path.Length > MaxLoggedPathLength ? MaxLoggedPathLength : path.Length;
+
+        // Back off one character rather than cut a surrogate pair in half. A lone high surrogate is
+        // not a character: it renders as a replacement glyph at best, and at worst breaks the
+        // encoder in whichever sink receives it - turning a truncated path into a lost security
+        // event.
+        if (length > 0 && length < path.Length && char.IsHighSurrogate(path[length - 1]))
+        {
+            length--;
+        }
+
+        ReadOnlySpan<char> source = path.AsSpan(0, length);
 
         return string.Create(source.Length, path, static (destination, original) =>
         {

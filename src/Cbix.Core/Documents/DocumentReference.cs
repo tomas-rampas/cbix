@@ -121,6 +121,37 @@ public sealed record DocumentReference
     public string DocumentId { get; }
 
     /// <summary>Gets the absolute <c>file://</c> location of the document bytes.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Providers read <see cref="Uri.LocalPath"/> from this and open the file.</b> The Claude
+    /// profile (S01-05) uploads the bytes it finds there, so this property is not a label - it is an
+    /// instruction that reaches the file system and then a third-party API.
+    /// </para>
+    /// <para>
+    /// <b>Contract, for any reference that came from the document registry.</b> The location is
+    /// <em>resolved</em> (every path component followed to its final link target, so it contains no
+    /// symbolic link, junction or <c>..</c> segment), <em>contained</em> (it lies under the
+    /// configured ingest root), and <em>round-trip stable</em> (<see cref="Uri.LocalPath"/> renders
+    /// back to exactly the path whose bytes were hashed). A consumer may therefore open
+    /// <see cref="Uri.LocalPath"/> directly and know it is opening the file the document's identity
+    /// and provenance describe.
+    /// </para>
+    /// <para>
+    /// <b>Why round-trip stability has to be stated.</b> The <see cref="Uri"/> constructor
+    /// percent-decodes and removes dot segments, which is right for a URI and wrong for a file name:
+    /// a real file named <c>%2e%2e\evil.pdf</c> yields a <see cref="Uri.LocalPath"/> naming a
+    /// different file outside the root, and <c>annex%41.pdf</c> yields one naming a non-existent
+    /// <c>annexA.pdf</c>. The registry refuses such a document rather than record a location that
+    /// names something other than what it hashed, which is what makes the guarantee above true and
+    /// what lets S01-05 and S01-08 build on it without re-validating.
+    /// </para>
+    /// <para>
+    /// This constructor cannot enforce any of that - it enforces shape only, and cannot see the
+    /// ingest root or the bytes. The guarantee belongs to the registry as the sole constructor of
+    /// published references; a reference built by hand in a test carries only what its caller put
+    /// in it.
+    /// </para>
+    /// </remarks>
     public Uri Location { get; }
 
     /// <summary>Gets the bare display file name, including extension.</summary>

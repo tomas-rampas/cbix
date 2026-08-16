@@ -50,10 +50,17 @@ CREATE TABLE dbo.document_registry (
 
     -- The document as it was read at first registration. file_name is a bare display
     -- name (no path separators - enforced by DocumentReference before a row is built);
-    -- source_location is the FULLY RESOLVED file:// location the bytes were actually read
-    -- from, after every path component was followed to its final link target. Storing the
-    -- submitted path instead would let provenance name a location whose bytes were never
-    -- the ones hashed. It is retained for audit, not for re-reading.
+    -- source_location is the FULLY RESOLVED OS PATH the bytes were actually read from,
+    -- after every path component was followed to its final link target - e.g.
+    -- 'D:\ingest\DE_SPECIMEN.pdf', not a file:// URI. Storing the submitted path instead
+    -- would let provenance name a location whose bytes were never the ones hashed. It is
+    -- retained for audit, not for re-reading.
+    --
+    -- The OS path is the canonical rendering because it is the form that unambiguously
+    -- names a file: a URI round trip percent-decodes and removes dot segments, so
+    -- '%2e%2e' and '%41' in a perfectly ordinary file name silently become a DIFFERENT
+    -- path. Ingest refuses any document whose location does not render back to exactly the
+    -- resolved path, so what lands here is the one string both renderings agree on.
     --
     -- Widths are the application's validated bounds, not guesses:
     --   file_name       260 - the practical per-component path limit.

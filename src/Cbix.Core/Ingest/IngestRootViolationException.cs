@@ -107,6 +107,8 @@ public sealed class IngestRootViolationException : Exception
                 "The submitted document path is a UNC or device-namespace path, which ingest refuses without resolving it.",
             IngestRootViolationReason.MultiplyLinkedFile =>
                 "The submitted document has more than one hard link, so the same bytes are reachable by a name outside the ingest root.",
+            IngestRootViolationReason.UnrepresentableLocation =>
+                "The submitted document's path cannot be recorded as a location without changing which file it names.",
             _ => "The submitted document was refused by the ingest containment boundary.",
         };
     }

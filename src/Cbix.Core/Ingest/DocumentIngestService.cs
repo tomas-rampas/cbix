@@ -64,7 +64,17 @@ namespace Cbix.Core.Ingest;
 /// service logs are the instrument that monitors that assumption. (2) <b>Per-directory case
 /// sensitivity</b> - the prefix comparison follows the operating system rather than probing each
 /// directory; see <see cref="PathBoundary.PathComparison"/> for why that can only ever be stricter,
-/// never looser.
+/// never looser. (3) <b>A stale root</b> - the ingest root is resolved once, at construction, and is
+/// not re-validated afterwards, so a root link re-pointed while the service is running keeps being
+/// judged against the directory it named at startup. Deliberate: re-resolving the root on every
+/// submission would trade a real per-document cost for a case the write-restriction control already
+/// covers, and a re-pointed root is a configuration change that warrants a restart. (4) <b>Paths
+/// inside BCL exception messages</b> - a failure this service did not decide (a denied ACL, a path
+/// shape the platform refuses) carries the resolved path in its own <c>Message</c>. Its structured
+/// event here records only the exception type and the sanitised path, but the exception itself
+/// propagates unaltered, so anything that logs it logs an unsanitised path. Bounded by the same
+/// trusted-log-sink assumption, and the reason the exception type is not rewritten: a caller
+/// diagnosing a share outage needs the real failure.
 /// </para>
 /// <para>
 /// <b>A refused path is not written to the ingest audit log.</b> That log is document-scoped: every
@@ -79,6 +89,12 @@ public sealed partial class DocumentIngestService
 {
     /// <summary>Read buffer for the bounded hashing pass. Matches the framework's default copy buffer.</summary>
     private const int ReadBufferSize = 81920;
+
+    /// <summary>
+    /// Placeholder identity for the pre-read construction probe. Shaped like a real content hash so
+    /// it passes the identity checks, and never stored: the real identity is derived from the bytes.
+    /// </summary>
+    private const string ProbeDocumentId = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
     private readonly IDocumentRegistry _registry;
     private readonly IIngestAuditLog _auditLog;
@@ -100,9 +116,10 @@ public sealed partial class DocumentIngestService
     /// </param>
     /// <exception cref="ArgumentNullException">Any required argument is <see langword="null"/>.</exception>
     /// <exception cref="IOException">
-    /// The configured ingest root could not be resolved - a broken or cyclic link in its path, or a
-    /// transient file-system failure. Resolution happens here, once, rather than per document: a root
-    /// that cannot be resolved can never contain anything, so it is a startup failure.
+    /// A cyclic link was found while resolving the configured ingest root, or the file system failed
+    /// while reading it. A root that does not exist is <em>not</em> an error here: missing components
+    /// are carried through unresolved by design, because an unmounted share is an operational state
+    /// that resolves itself, and each submission reports the absence properly when it tries to read.
     /// </exception>
     /// <exception cref="UnauthorizedAccessException">The process may not traverse the configured ingest root's path.</exception>
     public DocumentIngestService(
@@ -186,6 +203,13 @@ public sealed partial class DocumentIngestService
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
 
         string resolvedPath = ResolveWithinIngestRoot(documentPath);
+        string leafName = Path.GetFileName(resolvedPath);
+
+        // Both of these run before the file is opened: a document that cannot be represented, or
+        // whose name can never construct a reference, is refused without paying for a full read and
+        // hash of it.
+        Uri location = BuildContainedLocation(documentPath, resolvedPath);
+        AssertReferenceIsConstructible(location, leafName, mediaType);
 
         FileStreamOptions readOptions = new()
         {
@@ -198,11 +222,25 @@ public sealed partial class DocumentIngestService
         ContentHash contentHash;
         long byteLength;
 
-        await using (FileStream content = new(resolvedPath, readOptions))
+        try
         {
+            await using FileStream content = new(resolvedPath, readOptions);
+
             RefuseMultiplyLinkedFile(documentPath, resolvedPath, content);
 
             (contentHash, byteLength) = await ReadAndHashAsync(resolvedPath, content, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not DocumentNotIngestibleException
+            and not IngestRootViolationException
+            and not OperationCanceledException)
+        {
+            // Failures raised by the BCL on the open or the read - a missing file, a denied ACL, a
+            // path shape the platform refuses such as an alternate data stream - would otherwise
+            // leave no trace in the security log at all, because they are not refusals this service
+            // decided. Only the exception's type is recorded: its Message frequently embeds the
+            // resolved path, and this is the one logging site that has not sanitised it.
+            LogDocumentReadFailed(_logger, PathBoundary.ForLog(resolvedPath), error.GetType().FullName ?? error.GetType().Name);
+            throw;
         }
 
         if (byteLength == 0)
@@ -211,12 +249,9 @@ public sealed partial class DocumentIngestService
         }
 
         // Identity comes from the hash of the bytes just read - never from anything the submitter
-        // supplied. This is the single place in CBIX where a DocumentId is minted.
-        DocumentReference submitted = new(
-            contentHash.Canonical,
-            new Uri(resolvedPath),
-            Path.GetFileName(resolvedPath),
-            mediaType);
+        // supplied. This is the single place in CBIX where a DocumentId is minted. The location is
+        // the one already proven to round-trip, not a second Uri built from the same string.
+        DocumentReference submitted = new(contentHash.Canonical, location, leafName, mediaType);
 
         DateTimeOffset now = _timeProvider.GetUtcNow();
         DocumentRegistryEntry candidate = new(contentHash, submitted, byteLength, now);
@@ -309,6 +344,57 @@ public sealed partial class DocumentIngestService
         return resolved;
     }
 
+    /// <summary>
+    /// Builds the document's location and proves the <see cref="Uri"/> did not change which file it
+    /// names.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A <see cref="Uri"/> is not a container for a file path.</b> Its constructor percent-decodes
+    /// and applies RFC 3986 dot-segment removal - both correct for a URI, both wrong for a file name,
+    /// because <c>%</c> is an ordinary character in a file name and URL-encoded names in a drop share
+    /// are routine rather than exotic. Measured on a real tree: a file <c>%2e%2e\evil.pdf</c> inside
+    /// the root was hashed correctly while its location named a file <em>outside</em> the root, and
+    /// <c>annex%41.pdf</c> produced a location naming a non-existent <c>annexA.pdf</c>. In both cases
+    /// the digest described one file and the provenance described another.
+    /// </para>
+    /// <para>
+    /// Rather than hand-roll an escaping scheme for every quirk of the URI grammar, the round trip is
+    /// asserted: the location must render back to exactly the path that was resolved, and must still
+    /// lie under the ingest root. Anything else is refused. This is the difference between believing
+    /// a conversion is lossless and checking that this one was.
+    /// </para>
+    /// </remarks>
+    private Uri BuildContainedLocation(string documentPath, string resolvedPath)
+    {
+        Uri location = new(resolvedPath);
+
+        bool roundTrips = string.Equals(location.LocalPath, resolvedPath, PathBoundary.PathComparison)
+            && PathBoundary.IsUnder(_ingestRoot, location.LocalPath);
+
+        if (!roundTrips)
+        {
+            throw RefuseContainment(IngestRootViolationReason.UnrepresentableLocation, documentPath, resolvedPath);
+        }
+
+        return location;
+    }
+
+    /// <summary>
+    /// Runs <see cref="DocumentReference"/>'s own construction rules against the resolved document
+    /// before anything is read.
+    /// </summary>
+    /// <remarks>
+    /// The rules are not restated here - the constructor is called with a placeholder identity and
+    /// the result discarded - because a second copy of "what makes a file name acceptable" would
+    /// drift from the first, and the copy that drifts is always the one guarding the cheap path. The
+    /// real reference is built from the digest once the bytes are read, and its constructor remains
+    /// the backstop; this only moves the failure earlier, so a name that can never be accepted does
+    /// not first pay for a full read and hash.
+    /// </remarks>
+    private static void AssertReferenceIsConstructible(Uri location, string fileName, string mediaType) =>
+        _ = new DocumentReference(ProbeDocumentId, location, fileName, mediaType);
+
     /// <summary>Containment stage 3: the opened file must have exactly one name.</summary>
     private void RefuseMultiplyLinkedFile(string documentPath, string resolvedPath, FileStream content)
     {
@@ -397,7 +483,11 @@ public sealed partial class DocumentIngestService
         foreach (string segment in absolutePath[pathRoot.Length..]
             .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
-            current = Path.Combine(current, segment);
+            // Path.Join, not Path.Combine: Combine throws away everything accumulated so far the
+            // moment a segment looks rooted, so a segment such as "c:evil.pdf" would silently
+            // restart the path rather than extend it. That happens to fail closed here, but only
+            // incidentally - Join simply concatenates, which is what this loop actually means.
+            current = Path.Join(current, segment);
 
             // Directory first: a junction and a symlinked directory are both directories, and asking
             // FileInfo about one reads oddly even though it resolves.
@@ -506,4 +596,18 @@ public sealed partial class DocumentIngestService
         DocumentNotIngestibleReason reason,
         string documentPath,
         long? byteLength);
+
+    /// <summary>
+    /// Structured event for an open or read that failed for a reason this service did not decide.
+    /// </summary>
+    /// <remarks>
+    /// Only the exception's type name is recorded. BCL exception messages routinely embed the path
+    /// they failed on, and this is the one path into the log that has not been through
+    /// <see cref="PathBoundary.ForLog"/>; the sanitised path is supplied separately.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1012,
+        Level = LogLevel.Error,
+        Message = "Ingest could not read a submitted document. Document='{DocumentPath}', failure={FailureType}.")]
+    private static partial void LogDocumentReadFailed(ILogger logger, string documentPath, string failureType);
 }
