@@ -55,6 +55,19 @@ public sealed record DocumentContentHandle
     public string ProfileName { get; }
 
     /// <summary>Gets the opaque, profile-defined resume token, or <see langword="null"/> when the profile needs none.</summary>
+    /// <remarks>
+    /// <b>Trust boundary: this value is read back from a checkpoint and used verbatim.</b> A profile
+    /// redeeming it points the whole section-agent fan-out at whatever remote artefact it names, so
+    /// an attacker who can write to checkpoint storage can substitute a document of their choosing -
+    /// and every extracted value would be recorded against the legitimate document's identity. The
+    /// handle cannot detect that itself: the token is opaque by design, and a swapped token is
+    /// well-formed. What actually catches it is downstream and deterministic - the validator's
+    /// grounding gate requires every <c>SourceSnippet</c> to appear verbatim in the PDFPig text layer
+    /// extracted locally from the registered bytes, so content from a substituted document fails
+    /// containment and the run goes to review instead of being published (design 5.6, 8). That
+    /// compensating control is the reason this property can safely stay opaque, which is why it is
+    /// recorded here rather than left to be rediscovered at the redemption site.
+    /// </remarks>
     public string? ProviderToken { get; }
 
     /// <summary>

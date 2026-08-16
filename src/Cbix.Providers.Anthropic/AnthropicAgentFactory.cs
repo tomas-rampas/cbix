@@ -1,3 +1,5 @@
+using Cbix.Core.Documents;
+
 using global::Anthropic;
 using global::Anthropic.Core;
 
@@ -237,6 +239,46 @@ public sealed class AnthropicAgentFactory : IDisposable
             instructions: instructions,
             name: name,
             defaultMaxTokens: maxOutputTokens ?? _defaultMaxOutputTokens);
+    }
+
+    /// <summary>
+    /// Creates the Claude native-PDF document-content profile for one workflow run.
+    /// </summary>
+    /// <returns>
+    /// The profile as the neutral <see cref="IDocumentContentProvider"/> port. The declared type is
+    /// Core's abstraction, not the profile class: a caller that could name the implementation would
+    /// be one edit away from branching on which profile is in play, which the port's contract
+    /// forbids.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Call this once per workflow-run scope, and register the result as scoped.</b> The port
+    /// makes that lifetime part of its contract rather than a detail: the returned provider carries
+    /// the "upload each document once" memo, so a singleton would cache uploads for the lifetime of
+    /// the process and leak one run's document into another, and a transient would re-upload for
+    /// every agent in the fan-out.
+    /// </para>
+    /// <para>
+    /// The profile is created here rather than constructed by the composition root because it needs
+    /// the client - and the client is key-bearing, so it is never exposed. Sharing it also means the
+    /// uploads and the model calls travel over one connection pool, and one run scope costs one
+    /// small object rather than one HTTP stack.
+    /// </para>
+    /// <para>
+    /// <b>The returned instance is <see cref="IDisposable"/>, which the port's signature does not
+    /// show.</b> A DI container disposes the scoped instances it created, so a container-registered
+    /// provider needs nothing further; code that news up a scope by hand owns disposing what this
+    /// method returned, or the memo lives as long as the reference does. Disposal is deliberately
+    /// invisible on <see cref="IDocumentContentProvider"/> - the port describes presentation, not
+    /// resource ownership - so it is stated here, where the instance is handed out.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The factory has been disposed.</exception>
+    public IDocumentContentProvider CreateDocumentContentProvider()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+        return new ClaudeDocumentContentProvider(_client);
     }
 
     /// <summary>Disposes the shared Anthropic client. Agents created by this factory stop working.</summary>
