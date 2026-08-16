@@ -17,7 +17,7 @@ Governing principle: **agents propose, code disposes.** LLM agents never touch t
 
 ## Status
 
-Design phase. Draft v0.3 under architecture review; no source code yet. See the [solution design document](docs/Cross_Border_Instruction_Extraction_Solution_Design.md) for detailed architecture, data model, technology decisions, and delivery phases.
+In implementation — Sprint 01 of milestone M0 (PoC). The .NET solution skeleton (worker, core library, unit + BDD test projects) is in place; pipeline components land sprint by sprint per `plan/`. The [solution design document](docs/Cross_Border_Instruction_Extraction_Solution_Design.md) (Draft v0.3) remains the authoritative architecture, data model, and delivery phasing.
 
 ## Repository layout
 

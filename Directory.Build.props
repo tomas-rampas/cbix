@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Solution-wide build settings for CBIX.
+    The target framework is declared here once; individual .csproj files must not
+    redeclare TargetFramework, Nullable or ImplicitUsings.
+    LangVersion is intentionally absent: net10.0 pins C# 14 deterministically.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisModeSecurity>All</AnalysisModeSecurity>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+</Project>

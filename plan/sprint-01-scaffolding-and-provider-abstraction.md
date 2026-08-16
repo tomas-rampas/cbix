@@ -12,7 +12,7 @@
 
 ---
 
-### [ ] S01-01 — Solution scaffolding compiles and tests run
+### [x] S01-01 — Solution scaffolding compiles and tests run
 
 As a developer
 I want a .NET solution with a worker project, a unit-test project and a BDD-test project wired together

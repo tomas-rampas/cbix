@@ -1,0 +1,146 @@
+## .NET / Visual Studio ignore list for CBIX
+## Blacklist only — everything not listed here is tracked.
+
+# Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+BenchmarkDotNet.Artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.DotSettings.user
+*.svclog
+*.psess
+*.vsp
+*.vspx
+*.sap
+*.VisualState.xml
+
+# Test results and coverage
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResult.xml
+nunit-*.xml
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.coveragexml
+*.trx
+.coverlet/
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+.nuget/
+
+# MSBuild / SDK intermediates
+project.lock.json
+project.fragment.lock.json
+*.binlog
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+
+# Publish / deployment
+[Pp]ublish/
+*.[Pp]ublish.xml
+*.azurePubxml
+*.pubxml
+*.publishproj
+PublishScripts/
+
+# ASP.NET / EF
+ScaffoldingReadMe.txt
+*.mdf
+*.ldf
+*.ndf
+
+# Local secrets and environment overrides
+# Patterns are bracketed for case-robustness: on a case-sensitive checkout
+# (core.ignorecase=false) a plain lowercase pattern would leave
+# appsettings.Local.json / Secrets.json / .ENV trackable.
+appsettings.*.[Ll]ocal.json
+appsettings.[Ll]ocal.json
+*.[Ll]ocal.json
+[Ss]ecrets.json
+[Aa]pp[Ss]ettings.[Ss]ecrets.json
+.[Ee][Nn][Vv]
+.[Ee][Nn][Vv].*
+
+# Launch profiles: the canonical accidental-API-key leak vector. Keep the file
+# locally (the templates need it); it just never gets tracked. Real secrets belong
+# in user-secrets (see UserSecretsId in Cbix.Worker.csproj) or the environment.
+**/Properties/launchSettings.json
+
+# Cryptographic material - never tracked
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.snk
+*.jks
+*.keystore
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# NuGet lock files ARE tracked on purpose (RestorePackagesWithLockFile=true in
+# Directory.Build.props). Do not add packages.lock.json to this file.
+
+# OS noise
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

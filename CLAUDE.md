@@ -4,7 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**Pre-implementation.** There is no source code yet — no build, lint, or test commands exist. The repository contains the solution design and the golden-set seed data. Update this file with real commands once the .NET solution is scaffolded.
+**In implementation (Sprint 01).** The .NET solution is scaffolded: `Cbix.sln` at the repo root with `src/Cbix.Core` (contracts/executors — empty until S01-04), `src/Cbix.Worker` (worker host), `tests/Cbix.UnitTests` (xUnit) and `tests/Cbix.Bdd` (plain xUnit until Reqnroll is wired in S01-02). SDK pinned via `global.json` (10.0.110, rollForward patch). Shared build properties (net10.0, nullable, `TreatWarningsAsErrors`, `AnalysisModeSecurity=All`) live only in `Directory.Build.props`; package versions are centralised in `Directory.Packages.props` (CPM) with per-project `packages.lock.json` committed, and restore is locked to nuget.org via `nuget.config`.
+
+Commands (run from the repo root):
+
+```
+dotnet build Cbix.sln                      # must end 0 Warning(s), 0 Error(s) — warnings are errors
+dotnet test  Cbix.sln                      # runs both test projects (unit + BDD)
+dotnet format Cbix.sln --verify-no-changes # formatter gate (.editorconfig-backed); run before committing
+```
+
+Secrets (e.g. `ANTHROPIC_API_KEY`) come from user-secrets or environment variables only — never `launchSettings.json`, `appsettings*.json`, or any other tracked file. `**/Properties/launchSettings.json` is gitignored for exactly this reason.
 
 - `docs/Cross_Border_Instruction_Extraction_Solution_Design.md` — the authoritative design (Draft v0.3). Read it before writing any code; every architectural decision below is elaborated there with rationale.
 - `plan/` — the implementation plan: `00-roadmap.md` (milestones M0–M3, sprint index, design-component coverage table, working agreements) plus story files `sprint-01…05`. **BDD is mandatory**: every story starts from a failing Reqnroll/xUnit Gherkin scenario; story checkboxes (`### [ ] Sxx-nn`) are ticked only when the roadmap's Definition of Done is fully met. Keep this plan current as stories complete.

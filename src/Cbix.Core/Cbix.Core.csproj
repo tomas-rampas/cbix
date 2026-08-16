@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TargetFramework, Nullable, ImplicitUsings, LangVersion and
+       TreatWarningsAsErrors come from /Directory.Build.props. -->
+  <PropertyGroup>
+    <RootNamespace>Cbix.Core</RootNamespace>
+    <AssemblyName>Cbix.Core</AssemblyName>
+  </PropertyGroup>
+
+</Project>

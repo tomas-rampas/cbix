@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <!-- TargetFramework, Nullable, ImplicitUsings, LangVersion and
+       TreatWarningsAsErrors come from /Directory.Build.props. -->
+  <PropertyGroup>
+    <RootNamespace>Cbix.Worker</RootNamespace>
+    <AssemblyName>Cbix.Worker</AssemblyName>
+    <UserSecretsId>dotnet-Cbix.Worker-2e655ccd-443b-407a-855e-2d6ddcdfb36a</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cbix.Core\Cbix.Core.csproj" />
+  </ItemGroup>
+
+</Project>
