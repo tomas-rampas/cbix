@@ -7,4 +7,10 @@
     <AssemblyName>Cbix.Core</AssemblyName>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Provider-neutral AI abstractions only. Adding a provider package here would
+         break the LLM-agnosticism constraint at its root; see /Directory.Packages.props. -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+  </ItemGroup>
+
 </Project>

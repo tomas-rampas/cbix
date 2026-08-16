@@ -288,7 +288,16 @@
         "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
       },
       "cbix.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "[10.9.0, )"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "CentralTransitive",
+        "requested": "[10.9.0, )",
+        "resolved": "10.9.0",
+        "contentHash": "//nASHMCJVxnYfE/WSzfaLOao6/q816kPpgB9rxU0gfSmAny1u3rfQT0D4xAmcIo4yQqJs7rAeBB+M/dIMdZYA=="
       }
     }
   }

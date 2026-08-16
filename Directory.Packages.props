@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup Label="Runtime">
+    <!-- The LLM-neutral currency of the whole solution (design 3): AIAgent/IChatClient and
+         the AIContent hierarchy live here, and MAF builds on them. Cbix.Core depends on
+         these abstractions ONLY - never on a provider package - so a provider swap stays a
+         configuration change. Provider-specific payloads ride inside a profile via
+         AIContent.RawRepresentation, never in a Core signature. -->
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
   </ItemGroup>
 

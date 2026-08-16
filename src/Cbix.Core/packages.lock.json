@@ -1,6 +1,13 @@
 {
   "version": 2,
   "dependencies": {
-    "net10.0": {}
+    "net10.0": {
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Direct",
+        "requested": "[10.9.0, )",
+        "resolved": "10.9.0",
+        "contentHash": "//nASHMCJVxnYfE/WSzfaLOao6/q816kPpgB9rxU0gfSmAny1u3rfQT0D4xAmcIo4yQqJs7rAeBB+M/dIMdZYA=="
+      }
+    }
   }
 }
