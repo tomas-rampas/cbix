@@ -155,6 +155,28 @@ public sealed class AnthropicProviderOptions
     public int MaxOutputTokens { get; set; } = DefaultMaxOutputTokens;
 
     /// <summary>
+    /// Gets or sets a transport for the underlying client. Test seam; <see langword="null"/> in
+    /// production, where the SDK supplies its own pooled client.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately <c>internal</c> and visible only to the unit-test assembly. It exists because
+    /// the claims this adapter makes about ambient environment state - that the configured endpoint
+    /// governs where requests go, that the configured key is the credential sent, and that no
+    /// <c>Authorization</c> header accompanies it - are properties of the <em>outbound request</em>.
+    /// Asserting them on fields this class assigns to itself would prove only that the class agrees
+    /// with itself; the SDK is the component whose behaviour is in question, and a future
+    /// prerelease could ignore <c>ClientOptions.BaseUrl</c> without a single test noticing.
+    /// </para>
+    /// <para>
+    /// Internal rather than public because a transport is not a configuration knob: exposing it
+    /// would invite production code to swap the HTTP stack, and a caller holding the transport is
+    /// one step from observing the credential headers the adapter exists to keep contained.
+    /// </para>
+    /// </remarks>
+    internal HttpClient? Transport { get; set; }
+
+    /// <summary>
     /// Fails closed on the options, and on hostile ambient environment state, before any agent is
     /// built.
     /// </summary>
@@ -187,6 +209,12 @@ public sealed class AnthropicProviderOptions
                     + "snapshot; an empty value would let the provider choose, which the design forbids.");
         }
 
+        if (!IsDatedSnapshot(ModelId))
+        {
+            throw new InvalidOperationException(
+                DescribeAliasHazard($"{nameof(AnthropicProviderOptions)}.{nameof(ModelId)}", ModelId));
+        }
+
         if (MaxOutputTokens <= 0)
         {
             throw new InvalidOperationException(
@@ -203,6 +231,37 @@ public sealed class AnthropicProviderOptions
     /// </summary>
     /// <remarks>Call only after <see cref="Validate"/> has succeeded.</remarks>
     internal Uri ResolveBaseUrl() => new(BaseUrl, UriKind.Absolute);
+
+    /// <summary>
+    /// Reports whether a model id is a dated snapshot (a trailing <c>-yyyyMMdd</c>) rather than a
+    /// floating alias.
+    /// </summary>
+    /// <remarks>
+    /// Shape only - it does not check that the date exists or that the model does. Both are the
+    /// provider's business and would fail loudly at the first call; what cannot fail loudly, and is
+    /// therefore what this catches, is an alias silently continuing to work while pointing at a
+    /// different model than the one the golden set was measured against.
+    /// </remarks>
+    internal static bool IsDatedSnapshot(string modelId)
+    {
+        int lastSeparator = modelId.LastIndexOf('-');
+        if (lastSeparator < 0)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> suffix = modelId.AsSpan(lastSeparator + 1);
+
+        return suffix.Length == 8 && !suffix.ContainsAnyExceptInRange('0', '9');
+    }
+
+    /// <summary>Builds the message explaining why a floating alias is refused.</summary>
+    internal static string DescribeAliasHazard(string subject, string modelId) =>
+        $"{subject} ('{modelId}') is not a dated model snapshot. Anthropic repoints aliases such as "
+            + "'claude-haiku-4-5' to newer models, so an alias would silently change what the pipeline "
+            + "calls - invalidating the golden-set accuracy figures that gate release, with no change to "
+            + "any file in this repository. Pin the dated form (for example "
+            + $"'{DefaultModelId}').";
 
     /// <summary>Fails closed on the endpoint: absolute HTTPS only.</summary>
     /// <remarks>

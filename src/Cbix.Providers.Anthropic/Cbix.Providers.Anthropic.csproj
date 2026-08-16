@@ -28,6 +28,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The unit-test assembly sees `internal` members so the wire-level regression tests can
+         inject a capturing HttpMessageHandler through AnthropicProviderOptions.Transport. That
+         seam is internal precisely so it cannot become a supported way for production code to
+         reach the transport: nothing public is added, and nothing key-bearing is exposed. -->
+    <InternalsVisibleTo Include="Cbix.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Core supplies the provider-neutral contracts this adapter will implement: S01-05
          hosts the Claude document-content profile (IDocumentContentProvider) here. The
          dependency points adapter -> Core and never the reverse; Core must not learn that

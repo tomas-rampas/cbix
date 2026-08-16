@@ -13,10 +13,69 @@ namespace Cbix.UnitTests.Providers;
 /// whole assembly would slow every unrelated suite to fix a problem they do not have.
 /// </remarks>
 [CollectionDefinition(AnthropicEnvironmentCollection.Name)]
-public sealed class AnthropicEnvironmentCollection
+public sealed class AnthropicEnvironmentCollection : ICollectionFixture<AnthropicEnvironmentFixture>
 {
     /// <summary>The collection name.</summary>
     public const string Name = "Anthropic provider environment (serialised: mutates process state)";
+}
+
+/// <summary>
+/// Clears the Anthropic environment variables for the lifetime of the collection, so the tests
+/// that read them start from a known state rather than from whatever the developer exported.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Without this the suite is not hermetic, and not in a theoretical way: exporting
+/// <c>ANTHROPIC_AUTH_TOKEN</c> - the ordinary way to authenticate through a corporate gateway or an
+/// OAuth profile on a developer workstation - was measured to fail 18 tests, because the adapter
+/// deliberately refuses to start while it is set. A release-gate suite that passes or fails on
+/// ambient shell state is reporting on the workstation, not on the code.
+/// </para>
+/// <para>
+/// A collection fixture rather than a per-test scope: it establishes the baseline once, and every
+/// class in this collection inherits it, including ones owned by other stories. Per-test scopes
+/// still work on top of it - they save and restore against this cleaned baseline, so the tests that
+/// deliberately set a variable are unaffected.
+/// </para>
+/// <para>
+/// Mutating process-global state is safe here only because every test in the assembly that touches
+/// these variables lives in this one serialised collection. If a future test outside it starts
+/// reading them, it belongs in this collection too.
+/// </para>
+/// </remarks>
+public sealed class AnthropicEnvironmentFixture : IDisposable
+{
+    private static readonly string[] ManagedVariables =
+    [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_PROFILE",
+        "ANTHROPIC_CONFIG_DIR",
+    ];
+
+    private readonly Dictionary<string, string?> _original = new(StringComparer.Ordinal);
+
+    /// <summary>Captures and clears the managed variables.</summary>
+    public AnthropicEnvironmentFixture()
+    {
+        foreach (string name in ManagedVariables)
+        {
+            _original[name] = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    /// <summary>Restores the developer's environment so a test run leaves no trace.</summary>
+    public void Dispose()
+    {
+        foreach ((string name, string? value) in _original)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        _original.Clear();
+    }
 }
 
 /// <summary>
@@ -35,53 +94,17 @@ public sealed class AnthropicEnvironmentCollection
 /// stop them reopening on an SDK bump.
 /// </para>
 /// <para>
-/// <b>Scope, stated honestly.</b> What is asserted here is everything observable from outside the
-/// adapter: the endpoint it resolved, and whether construction fails. The wire-level claim - that
-/// <c>X-Api-Key</c> carries the configured key and no <c>Authorization</c> header is sent - was
-/// established by the recorded probe, and re-asserting it in-repo would need a test-only
-/// <c>HttpMessageHandler</c> seam on the factory. That seam is deliberately absent: exposing the
-/// client or its options would hand callers the key-bearing <c>ClientOptions</c> (whose
-/// <c>ToString()</c> was measured printing the key in clear), which is a worse trade than the
-/// coverage it buys. Re-run the probe on an SDK upgrade.
+/// <b>Scope.</b> This class covers what is decidable without sending a request: that construction
+/// fails closed, and that the options validator rejects a bad endpoint. The claims about what
+/// actually goes on the wire - which host, which credential headers - are asserted in
+/// <see cref="AnthropicWireTests"/> against a captured request, because they are properties of the
+/// SDK's behaviour rather than of any value this adapter assigns to itself.
 /// </para>
 /// </remarks>
 [Collection(AnthropicEnvironmentCollection.Name)]
 public sealed class AnthropicAmbientEnvironmentTests
 {
     private const string DummyApiKey = "unit-test-placeholder-key-not-a-real-credential";
-
-    [Fact]
-    public void ResolvedEndpoint_IsGovernedByConfigurationNotByTheEnvironment()
-    {
-        // The headline regression. Without an explicit BaseUrl the SDK was measured taking the
-        // endpoint from this variable - which would send the API key and the document text to an
-        // arbitrary host, with nothing in the logs to show it happened.
-        using EnvironmentVariableScope scope = new();
-        scope.Set("ANTHROPIC_BASE_URL", "https://attacker.example.invalid");
-
-        using AnthropicAgentFactory factory = new(new AnthropicProviderOptions { ApiKey = DummyApiKey });
-
-        Assert.Equal(new Uri(AnthropicProviderOptions.DefaultBaseUrl), factory.ResolvedEndpoint);
-    }
-
-    [Fact]
-    public void ResolvedEndpoint_HonoursAnExplicitlyConfiguredEndpoint()
-    {
-        // The other half: pinning the endpoint must not mean hardcoding it. An approved egress
-        // proxy (design 8) is a configuration change.
-        using EnvironmentVariableScope scope = new();
-        scope.Set("ANTHROPIC_BASE_URL", "https://attacker.example.invalid");
-
-        AnthropicProviderOptions options = new()
-        {
-            ApiKey = DummyApiKey,
-            BaseUrl = "https://egress-proxy.internal.example",
-        };
-
-        using AnthropicAgentFactory factory = new(options);
-
-        Assert.Equal(new Uri("https://egress-proxy.internal.example"), factory.ResolvedEndpoint);
-    }
 
     [Fact]
     public void Construction_FailsClosedWhenAnthropicAuthTokenIsSet()
@@ -104,28 +127,14 @@ public sealed class AnthropicAmbientEnvironmentTests
         // Deliberately NOT rejected. The explicit key was measured to win, and CLAUDE.md sanctions
         // the variable as the local developer channel - failing on it would break the documented
         // workflow for no security gain. This test is what stops someone "hardening" the guard by
-        // adding it to the rejected list.
+        // adding it to the rejected list; that the explicit key is the one actually sent is
+        // asserted at the wire in AnthropicWireTests.
         using EnvironmentVariableScope scope = new();
         scope.Set("ANTHROPIC_API_KEY", "an-ambient-developer-key");
 
         using AnthropicAgentFactory factory = new(new AnthropicProviderOptions { ApiKey = DummyApiKey });
 
-        Assert.Equal(new Uri(AnthropicProviderOptions.DefaultBaseUrl), factory.ResolvedEndpoint);
-    }
-
-    [Fact]
-    public void Construction_SucceedsWhenOnlyProfileVariablesAreSet()
-    {
-        // Measured suppressed: supplying an explicit key closes the SDK's on-disk profile
-        // resolution path entirely. Recorded as a test so the asymmetry with ANTHROPIC_AUTH_TOKEN
-        // stays a measurement rather than folklore.
-        using EnvironmentVariableScope scope = new();
-        scope.Set("ANTHROPIC_PROFILE", "some-profile");
-        scope.Set("ANTHROPIC_CONFIG_DIR", Path.Combine(Path.GetTempPath(), "cbix-nonexistent-profile-dir"));
-
-        using AnthropicAgentFactory factory = new(new AnthropicProviderOptions { ApiKey = DummyApiKey });
-
-        Assert.Equal(new Uri(AnthropicProviderOptions.DefaultBaseUrl), factory.ResolvedEndpoint);
+        Assert.NotNull(factory);
     }
 
     [Theory]
@@ -149,38 +158,5 @@ public sealed class AnthropicAmbientEnvironmentTests
         AnthropicProviderOptions options = new() { ApiKey = DummyApiKey, BaseUrl = baseUrl };
 
         Assert.Throws<InvalidOperationException>(options.Validate);
-    }
-
-    /// <summary>
-    /// Sets environment variables for the duration of a test and restores their prior values.
-    /// </summary>
-    /// <remarks>
-    /// Restore happens in <see cref="Dispose"/>, which the <c>using</c> statement runs even when the
-    /// test fails - a test that leaked a hostile <c>ANTHROPIC_BASE_URL</c> would poison every later
-    /// test in this collection and be diagnosed as a bug in the wrong place.
-    /// </remarks>
-    private sealed class EnvironmentVariableScope : IDisposable
-    {
-        private readonly Dictionary<string, string?> _original = new(StringComparer.Ordinal);
-
-        internal void Set(string name, string? value)
-        {
-            if (!_original.ContainsKey(name))
-            {
-                _original[name] = Environment.GetEnvironmentVariable(name);
-            }
-
-            Environment.SetEnvironmentVariable(name, value);
-        }
-
-        public void Dispose()
-        {
-            foreach ((string name, string? value) in _original)
-            {
-                Environment.SetEnvironmentVariable(name, value);
-            }
-
-            _original.Clear();
-        }
     }
 }

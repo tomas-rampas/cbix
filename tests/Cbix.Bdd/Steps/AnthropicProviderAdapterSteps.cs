@@ -54,6 +54,49 @@ public sealed class AnthropicProviderAdapterSteps(AnthropicProviderAdapterState 
     /// </summary>
     private const string DummyApiKey = "bdd-scenario-placeholder-key-not-a-real-credential";
 
+    /// <summary>
+    /// Environment variables the SDK reads that would otherwise decide this scenario's outcome.
+    /// </summary>
+    private static readonly string[] AmbientVariables =
+    [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_PROFILE",
+        "ANTHROPIC_CONFIG_DIR",
+    ];
+
+    private readonly Dictionary<string, string?> _ambientBackup = new(StringComparer.Ordinal);
+
+    /// <summary>Clears the ambient Anthropic environment so the scenario reports on the code.</summary>
+    /// <remarks>
+    /// The adapter deliberately refuses to start while <c>ANTHROPIC_AUTH_TOKEN</c> is set, so a
+    /// developer who authenticates through a gateway or OAuth profile would see this scenario fail
+    /// for a reason that has nothing to do with the adapter. A release-gate suite has to control
+    /// the process state it reads.
+    /// </remarks>
+    [BeforeScenario]
+    public void ClearAmbientAnthropicEnvironment()
+    {
+        foreach (string name in AmbientVariables)
+        {
+            _ambientBackup[name] = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    /// <summary>Restores the developer's environment so a test run leaves no trace.</summary>
+    [AfterScenario]
+    public void RestoreAmbientAnthropicEnvironment()
+    {
+        foreach ((string name, string? value) in _ambientBackup)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        _ambientBackup.Clear();
+    }
+
     [Given("an Anthropic API key configured via the secrets-manager pattern")]
     public void GivenAnAnthropicApiKeyConfigured()
     {

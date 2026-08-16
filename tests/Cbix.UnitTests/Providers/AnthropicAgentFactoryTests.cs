@@ -112,6 +112,39 @@ public sealed class AnthropicAgentFactoryTests
                 + "alias the provider can repoint underneath us.");
     }
 
+    [Theory]
+    [InlineData("claude-haiku-4-5")]
+    [InlineData("claude-sonnet-4-6")]
+    [InlineData("claude-opus-4-5")]
+    public void Validate_RejectsAFloatingAliasAsTheConfiguredModel(string alias)
+    {
+        // The const test above pins OUR default. This pins the invariant for an operator-supplied
+        // value: binding ModelId to an alias from configuration would repoint the pipeline just as
+        // silently, and nothing else in the system would notice.
+        AnthropicProviderOptions options = ValidOptions();
+        options.ModelId = alias;
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => new AnthropicAgentFactory(options));
+
+        Assert.Contains("dated model snapshot", error.Message, StringComparison.Ordinal);
+        Assert.Contains(alias, error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("claude-sonnet-4-6")]
+    [InlineData("claude-haiku-4-5")]
+    public void CreateAgent_RejectsAFloatingAliasAsThePerCallModel(string alias)
+    {
+        // The likelier of the two routes: the tiered call sites name their model in code, where an
+        // alias reads as entirely reasonable.
+        using AnthropicAgentFactory factory = new(ValidOptions());
+
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => factory.CreateAgent("matrix", "Read the table.", alias));
+
+        Assert.Contains("dated model snapshot", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void DefaultBaseUrl_IsTheAnthropicApiOverHttps()
     {

@@ -123,9 +123,22 @@ public sealed class AnthropicAgentFactory : IDisposable
         ClientOptions clientOptions = new()
         {
             ApiKey = options.ApiKey,
-            BaseUrl = ResolvedEndpoint.ToString(),
+
+            // AbsoluteUri, not ToString(): ToString() unescapes percent-encoding (a %20 in a proxy
+            // path comes back as a literal space), which would corrupt an endpoint that needed the
+            // escaping. AbsoluteUri round-trips it.
+            BaseUrl = ResolvedEndpoint.AbsoluteUri,
             AuthToken = null,
         };
+
+        // Assigned last and separately. ClientOptions is a struct of lazily-resolved fields, and
+        // assigning the transport-related members was measured to freeze the credential and
+        // endpoint state as it stands at that moment - so every credential and endpoint setting
+        // above must already be in place before this runs.
+        if (options.Transport is { } transport)
+        {
+            clientOptions.HttpClient = transport;
+        }
 
         _client = new AnthropicClient(clientOptions);
     }
@@ -201,6 +214,17 @@ public sealed class AnthropicAgentFactory : IDisposable
             // back: silently substituting the default would run a Sonnet-tier agent on Haiku and
             // show up only as degraded matrix accuracy.
             ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+            // The per-call override is the other way a floating alias enters the pipeline, and the
+            // likelier one: the tiered call sites name their model in code, where 'claude-sonnet-4-6'
+            // reads as perfectly reasonable. Checked here as well as in Validate() so neither route
+            // is left open.
+            if (!AnthropicProviderOptions.IsDatedSnapshot(modelId))
+            {
+                throw new ArgumentException(
+                    AnthropicProviderOptions.DescribeAliasHazard(nameof(modelId), modelId),
+                    nameof(modelId));
+            }
         }
 
         if (maxOutputTokens is { } requestedTokens)
