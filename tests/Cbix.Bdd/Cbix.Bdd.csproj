@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Solution-wide settings come from /Directory.Build.props.
-       Shared test-stack packages, GenerateDocumentationFile=false and
+       Shared test-stack packages, test-only overrides and
        ReqnrollUseIntermediateOutputPathForCodeBehind come from
        /tests/Directory.Build.props. Package versions come from
        /Directory.Packages.props (CPM). -->

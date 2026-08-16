@@ -39,7 +39,10 @@
     pipeline on advisories, which is the right place for a time-varying gate.
   -->
   <PropertyGroup>
-    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+    <!-- Append, never assign: an outright assignment discards anything the SDK, a targets file
+         or a project already put in this property, silently promoting warnings this repo never
+         chose to promote (or dropping exemptions it relies on). -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
   <!--

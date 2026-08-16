@@ -26,6 +26,13 @@
         emits telemetry.
   -->
   <RunConfiguration>
+    <!--
+      A run that discovers zero tests currently exits 0, which reads as "green" on CI. That is a
+      real failure mode here, not a theoretical one: the BDD project's tests are MSBuild-generated
+      from .feature files, so a code-generation misfire produces an assembly with no tests at all
+      and a passing pipeline. Treat an empty run as the failure it is.
+    -->
+    <TreatNoTestsAsError>true</TreatNoTestsAsError>
     <EnvironmentVariables>
       <REQNROLL_TELEMETRY_ENABLED>0</REQNROLL_TELEMETRY_ENABLED>
     </EnvironmentVariables>

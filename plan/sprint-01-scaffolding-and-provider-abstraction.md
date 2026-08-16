@@ -86,13 +86,13 @@ Feature: CI skeleton
 Done means:
 - No Azure-hosted CI service used for anything that would violate the no-Azure constraint on the runtime platform; CI tooling itself (e.g. GitHub Actions) is acceptable since it is build infrastructure, not part of the deployed system — noted explicitly in the pipeline file's header comment to avoid future confusion.
 - Restore runs locked: the pipeline sets `ContinuousIntegrationBuild=true` (activating the CI-conditional `RestoreLockedMode` in `Directory.Build.props`) or passes `--locked-mode` explicitly — committed `packages.lock.json` files are only a control when restore is locked.
-- A dedicated dependency-audit step hard-fails on known-vulnerable packages (`dotnet list package --vulnerable --include-transitive`); NU190x audit warnings are excluded from warnings-as-errors locally precisely so advisories surface here, actionably, instead of breaking developer builds at random times.
+- A dedicated dependency-audit step hard-fails on advisories by re-arming NuGet audit for that step only: `dotnet restore Cbix.sln -p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904` (measured: exit 1 with error NU190x when an advisory exists; the command-line property overrides the `WarningsNotAsErrors` exemption in `Directory.Build.props`). Caution: `dotnet list package --vulnerable` exits 0 even on High-severity findings — it is a report, not a gate; never use it bare as a pipeline step. NU190x warnings are excluded from warnings-as-errors locally precisely so advisories surface here, actionably, instead of breaking developer builds at random times.
 - `REQNROLL_TELEMETRY_ENABLED=0` exported at job level — covers the build-time telemetry path that the checked-in `.runsettings` (test-run scope) cannot reach.
 - `dotnet format Cbix.sln --verify-no-changes` runs as a pipeline step.
 
 ---
 
-### [ ] S01-04 — `IDocumentContentProvider` port defined
+### [x] S01-04 — `IDocumentContentProvider` port defined
 
 As a developer
 I want a document-content-provider abstraction with no provider-specific types in its signature

@@ -29,10 +29,16 @@ internal sealed class Worker(ILogger<Worker> logger, TimeProvider timeProvider) 
                 await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, stoppingToken);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Expected on shutdown: the host cancels the stopping token. Swallowing it
             // here keeps the process exit code at zero.
+            //
+            // The filter is load-bearing. An unfiltered catch also swallows cancellation the
+            // host did NOT ask for - a future per-operation timeout token, or a library that
+            // cancels internally - and the loop would exit silently, leaving a running process
+            // that has stopped doing any work. Anything other than our own shutdown must
+            // propagate and fail the host loudly.
         }
     }
 }

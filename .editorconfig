@@ -34,6 +34,12 @@ tab_width = 4
 # "\ No newline at end of file" diff noise on every last-line edit).
 insert_final_newline = true
 
+# Belt to .gitattributes' braces. .gitattributes governs what Git writes on
+# checkout; this governs what an editor or `dotnet format` writes on save, so a
+# tool that never consults Git cannot reintroduce CRLF into a source file whose
+# verbatim snippets the grounding gate compares by exact string containment.
+end_of_line = lf
+
 #### .NET Coding Conventions ####
 [*.{cs,vb}]
 
@@ -418,3 +424,12 @@ dotnet_diagnostic.IDE0161.severity = warning
 # dotnet_style_namespace_match_folder preference above. Matters here because
 # later stories add many small contract/executor types across nested folders.
 dotnet_diagnostic.IDE0130.severity = warning
+
+# Gherkin feature files
+# Same reasoning as [*.cs] above: a DocString holding an expected document snippet
+# must be byte-identical on Windows and Linux, so the ending is pinned by the editor
+# as well as by .gitattributes.
+[*.feature]
+indent_size = 2
+insert_final_newline = true
+end_of_line = lf
