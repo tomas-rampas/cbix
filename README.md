@@ -24,6 +24,7 @@ Design phase. Draft v0.2 under architecture review; no source code yet. See the 
 | File | Purpose |
 |------|---------|
 | `docs/Cross_Border_Instruction_Extraction_Solution_Design.md` | Complete architecture, data model, and engineering decisions |
+| `plan/` | Implementation plan: milestone roadmap (M0–M3) and 2-week sprint files with BDD user stories |
 | `data/Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf` | Synthetic specimen: fictional German cross-border instruction |
 | `data/Cross_Border_Trading_Legal_Instruction_CH_SPECIMEN.pdf` | Synthetic specimen: fictional Swiss cross-border instruction |
 | `data/cbti_country_ground_truth.json` | Golden set v0: expected extraction for both specimens |
