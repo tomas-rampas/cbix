@@ -52,9 +52,29 @@ public interface ITextLayerExtractor
     /// <see cref="DocumentNotIngestibleReason.UnsupportedPageNumbering"/> (the document renumbers its
     /// own pages, so page-keyed provenance could not be trusted).
     /// <para>
-    /// <b>This reason set is deterministic in the document's bytes.</b> The same file refused today is
-    /// refused identically tomorrow, which is what lets ingest treat a re-submission of it as a
-    /// duplicate rather than as something worth retrying.
+    /// <b>Two of the three reasons are deterministic in the document's bytes; one is not, and the
+    /// difference matters.</b> <see cref="DocumentNotIngestibleReason.Unreadable"/> and
+    /// <see cref="DocumentNotIngestibleReason.UnsupportedPageNumbering"/> are properties of the file
+    /// itself - the same bytes are refused identically on any retry, on any host, under any
+    /// configuration - which is what lets ingest treat a re-submission as a duplicate rather than as
+    /// something worth retrying.
+    /// </para>
+    /// <para>
+    /// <see cref="DocumentNotIngestibleReason.TooLarge"/> is neither. It compares a re-opened handle's
+    /// length against a <em>configured</em> cap, so it depends on deployment configuration and on the
+    /// state of the file at the moment of that second open - the same document is admitted under a
+    /// larger cap, and a file swapped between the hash and the re-open is judged on bytes the registry
+    /// never saw. It is a TOCTOU-sensitive, configuration-dependent verdict wearing the same exception
+    /// type as the other two.
+    /// </para>
+    /// <para>
+    /// <b>The consequence is worth stating plainly, because it is a real operational trap.</b> A
+    /// document registers, is then refused <see cref="DocumentNotIngestibleReason.TooLarge"/>, and is
+    /// thereafter permanently without a text layer: dedupe short-circuits every re-submission, so
+    /// raising the cap or restoring the original file does not by itself cause a retry. Recovering
+    /// that document is a run-level operation - re-driving preparation for an already-registered
+    /// document - and it belongs to Sprint 03's <c>extraction_runs</c> and review queue, not to a
+    /// second pass through the ingest gate.
     /// </para>
     /// </exception>
     /// <exception cref="FileNotFoundException">There is no file at the document's location.</exception>

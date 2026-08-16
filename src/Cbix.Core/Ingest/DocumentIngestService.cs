@@ -310,11 +310,18 @@ public sealed partial class DocumentIngestService
         // entry, and this call throws. Re-submitting does not repair it - the document is now known,
         // so the second submission is a duplicate and never re-extracts.
         //
-        // That is sound precisely because ITextLayerExtractor's refusals are deterministic in the
-        // bytes: Unreadable, TooLarge and UnsupportedPageNumbering all describe the file itself, and
-        // the same file will be refused identically on any retry. There is nothing to gain by
-        // re-running preparation for it, and the registry is behaving as designed - it records
-        // document identity, not run state.
+        // That is sound for the refusals that are deterministic in the bytes. Unreadable and
+        // UnsupportedPageNumbering describe the file itself, so the same file is refused identically
+        // on any retry: there is nothing to gain by re-running preparation for it, and the registry is
+        // behaving as designed - it records document identity, not run state.
+        //
+        // It is NOT sound for TooLarge, and the ordering does not pretend otherwise. That refusal
+        // tests a re-opened handle against a configured cap, so it is configuration-dependent and
+        // TOCTOU-sensitive: raising the cap, or restoring a file that was swapped between the hash and
+        // the re-open, would make the same document extractable - but dedupe short-circuits the
+        // re-submission, so it stays text-less until something re-drives preparation for an
+        // already-registered document. That recovery path is Sprint 03's extraction_runs and review
+        // queue; see ITextLayerExtractor, which records the same split on the contract itself.
         //
         // Transient failures are deliberately kept out of that set. An IOException from a share that
         // dropped, and an OutOfMemoryException from a decompression bomb, propagate as themselves

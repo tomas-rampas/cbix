@@ -1,5 +1,3 @@
-using System.Globalization;
-
 using Cbix.Core.Documents;
 
 using Microsoft.Extensions.Logging;
@@ -78,6 +76,22 @@ namespace Cbix.Core.Ingest;
 /// onto physical indices and teaching the prompts which numbering to report; that is deliberately
 /// not attempted here, because a mapping with no test document behind it is a guess wearing a
 /// guardrail's clothes.
+/// </para>
+/// <para>
+/// <b>The page count is not reconciled after enumeration, and that is a decision rather than an
+/// omission.</b> <c>GetPages()</c> yields exactly <see cref="PdfDocument.NumberOfPages"/> items by
+/// construction - the property is PDFPig's own resolved page count, derived from the same walk of the
+/// page tree that produces the pages - so comparing the two can only ever compare a number against
+/// itself. An enumeration that fails partway does not return a short list; it throws, and the filter
+/// below catches it. A count check here would be the same defect as the page-order check described
+/// above: a guardrail that reads as diligence and can never fire.
+/// </para>
+/// <para>
+/// A document whose <c>/Count</c> entry lies - claiming nine pages over a page tree holding three -
+/// is therefore a deliberate shrug, not a refusal. Extraction operates on the pages PDFPig resolved,
+/// and the text layer describes exactly those, so a dishonest <c>/Count</c> changes nothing about the
+/// fidelity of what this produces or about which page a snippet is grounded against. Refusing on it
+/// would reject a readable document over a metadata field nothing downstream consults.
 /// </para>
 /// <para>
 /// <b>The file is opened again here, having already been read and hashed by
@@ -203,7 +217,6 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
         }
 
         List<string> pages = [];
-        int declaredPageCount;
 
         try
         {
@@ -221,9 +234,7 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
                     innerException: null);
             }
 
-            declaredPageCount = pdf.NumberOfPages;
-
-            if (declaredPageCount < 1)
+            if (pdf.NumberOfPages < 1)
             {
                 throw Refuse(
                     DocumentNotIngestibleReason.Unreadable,
@@ -241,8 +252,7 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
         }
         catch (Exception error) when (error is not DocumentNotIngestibleException
             and not OperationCanceledException
-            and not IOException
-            and not OutOfMemoryException)
+            && !WrapsInfrastructureFailure(error))
         {
             // Everything remaining, not PDFPig's format exception alone. Measured against plausible
             // damage: garbage bytes, a truncated file and a smashed trailer all raise
@@ -250,7 +260,7 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
             // ArgumentOutOfRangeException about a negative offset. Catching only the library's own
             // type would let that one out of ingest as an unexplained argument error.
             //
-            // The two exclusions above them are the point of this filter, though:
+            // What WrapsInfrastructureFailure excludes is the point of this filter, though:
             //
             //   IOException - the share dropped, the handle died, the network went away. That is not
             //   a statement about the document, and rewriting it as Unreadable would tell an operator
@@ -271,23 +281,44 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
                 error);
         }
 
-        // The claim and the delivery, reconciled. TextLayer's contract is that it holds a string for
-        // every page of the document, and every page number below is derived from position in this
-        // list - so an enumeration that stopped early would produce a text layer that is short,
-        // internally consistent, and wrong, with grounding rejecting every snippet from the pages
-        // that never arrived. This is the check that actually defends that claim.
-        if (pages.Count != declaredPageCount)
+        return Task.FromResult(new TextLayer(document.DocumentId, pages));
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="error"/> is, or wraps at any depth, a failure that must never
+    /// be rewritten as a document refusal.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The chain is walked rather than the top type tested, because a filter that inspects only the
+    /// outermost exception is one library release away from being wrong. PDFPig does not currently
+    /// wrap a mid-parse <see cref="IOException"/> or <see cref="OutOfMemoryException"/> in its own
+    /// format exception - no such case could be constructed against 0.1.15 - but nothing in its
+    /// contract forbids it, and the failure mode if it started would be silent and permanent: a
+    /// transient share outage would be recorded as <see cref="DocumentNotIngestibleReason.Unreadable"/>
+    /// against a document that is already registered, so dedupe would refuse to re-extract it and the
+    /// document would stay text-less for good. Walking the chain costs a few pointer hops on a path
+    /// that is already throwing.
+    /// </para>
+    /// <para>
+    /// Both types are matched by assignability, so derived types (<see cref="FileNotFoundException"/>,
+    /// <see cref="DirectoryNotFoundException"/>) travel with them. Depth is bounded by the chain the
+    /// runtime built; an <see cref="AggregateException"/> would only be walked along its
+    /// <see cref="Exception.InnerException"/>, which is the first of its inner exceptions - accepted,
+    /// because nothing in this call path produces one.
+    /// </para>
+    /// </remarks>
+    private static bool WrapsInfrastructureFailure(Exception error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
         {
-            throw Refuse(
-                DocumentNotIngestibleReason.Unreadable,
-                documentPath,
-                string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"the document declares {declaredPageCount} pages but yielded {pages.Count}"),
-                innerException: null);
+            if (current is IOException or OutOfMemoryException)
+            {
+                return true;
+            }
         }
 
-        return Task.FromResult(new TextLayer(document.DocumentId, pages));
+        return false;
     }
 
     /// <summary>
