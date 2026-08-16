@@ -1,0 +1,137 @@
+# CBIX CI skeleton (story S01-03).
+#
+# No-Azure scope note: the design's hard no-Azure constraint (CLAUDE.md, design doc
+# §3/§8) applies to the RUNTIME platform CBIX deploys onto — it does not forbid
+# GitHub Actions as build infrastructure. GitHub Actions is not part of the deployed
+# system; it never touches production data or the Anthropic API key beyond CI
+# secrets scoped to this pipeline. Stated here explicitly so this is never
+# re-litigated as a constraint violation.
+#
+# Deliberately out of scope for this skeleton: build matrix, release/publish jobs,
+# TRX/test-result artifact upload, and coverage reporting. coverlet.collector is
+# already referenced by the test projects, but wiring coverage collection/upload
+# (and test-result artifacts) is deferred to a later story.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+
+# Default to read-only GITHUB_TOKEN scope. The repo's current default happening to
+# be read-only is a setting someone could change; this makes it a workflow
+# invariant instead.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same branch/PR ref instead of burning runner minutes
+# on a commit nobody will look at again.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Workflow-level env (applies to every job/step below, not just one job):
+#   REQNROLL_TELEMETRY_ENABLED=0 — Reqnroll's build-time telemetry
+#     (Reqnroll.Tools.MsBuild.Generation, inside the MSBuild process) posts to Azure
+#     Application Insights and cannot be reached by the checked-in .runsettings,
+#     which only covers the test-RUN host process (see .runsettings for the full
+#     split).
+#   DOTNET_CLI_TELEMETRY_OPTOUT=1 — the .NET CLI's own telemetry posts to the same
+#     Application Insights infrastructure the no-Azure constraint forbids.
+env:
+  REQNROLL_TELEMETRY_ENABLED: "0"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No step needs git credentials after checkout, and fork-PR code executes
+          # in this job — don't leave a token lying around for it to find.
+          persist-credentials: false
+
+      - name: Setup .NET SDK (from global.json)
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          cache: true
+          # Exact lock files only (one level under src/ and tests/) — a recursive
+          # ** glob would also match stale packages.lock.json copies left under
+          # bin/**/net10.0/ and poison the cache key.
+          cache-dependency-path: |
+            src/*/packages.lock.json
+            tests/*/packages.lock.json
+
+      # Locked restore: ContinuousIntegrationBuild=true activates the CI-conditional
+      # RestoreLockedMode in Directory.Build.props, so a packages.lock.json that no
+      # longer matches the project (NU1004) fails the build instead of being
+      # silently rewritten.
+      - name: Restore (locked)
+        run: dotnet restore Cbix.sln -p:ContinuousIntegrationBuild=true
+
+      # Dedicated audit gate: re-arms NU1901-NU1904 as errors for this restore only.
+      # Directory.Build.props exempts them from TreatWarningsAsErrors globally so a
+      # newly published advisory against a transitive package never breaks a
+      # developer's unrelated local build at a time nobody chose; CI is where that
+      # advisory has to become a hard failure instead. `dotnet list package
+      # --vulnerable` is deliberately NOT used as the gate here — it exits 0 even on
+      # High-severity findings, so it is a report, never a check.
+      #
+      # -p:ContinuousIntegrationBuild=true: this restore must also be locked, or it
+      # runs unlocked and its assets file (the one the --no-restore build below
+      # consumes) is the product of an unverified restore. Re-applying the same
+      # property here does not no-op against the prior locked restore — the
+      # WarningsAsErrors promotion is re-evaluated on every restore invocation
+      # (measured), so back-to-back restores with identical properties are safe and
+      # this one still gates correctly.
+      # -p:NuGetAuditMode=all: pins audit scope to direct+transitive explicitly
+      # rather than relying on the SDK's current default, so a future SDK default
+      # change can't silently narrow what this gate checks.
+      #
+      # MSBuild property list syntax is semicolon-delimited; a shell-quoted
+      # "NU1901;NU1902;..." has its quotes stripped by the shell before MSBuild ever
+      # sees the argument, so MSBuild receives a bare semicolon-split value and
+      # fails immediately with MSB1006 (measured — never reaches restore). %3B is
+      # the URL-encoded semicolon MSBuild's command-line parser expects here.
+      - name: Dependency audit (advisories are hard failures)
+        run: >-
+          dotnet restore Cbix.sln
+          -p:ContinuousIntegrationBuild=true
+          -p:NuGetAuditMode=all
+          -p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904
+
+      # Report-only, non-gating: keeps a human-readable vulnerability listing in the
+      # logs alongside the hard gate above. Never rely on this step's exit code.
+      # Gated on success() (not always()) — after a failed restore there is no valid
+      # assets file to list packages from, and running this anyway just emits
+      # misleading errors against absent restore output.
+      - name: Vulnerability report (non-gating, informational)
+        if: success()
+        run: dotnet list Cbix.sln package --vulnerable --include-transitive || true
+
+      - name: Build
+        run: dotnet build Cbix.sln --no-restore -p:ContinuousIntegrationBuild=true
+
+      # .runsettings at the repo root is wired in via RunSettingsFilePath in
+      # Directory.Build.props, so it applies automatically with no --settings flag.
+      # TreatNoTestsAsError=true in that file turns a zero-tests run (e.g. a Reqnroll
+      # code-gen misfire producing an empty BDD assembly) into a hard failure instead
+      # of a silently green pipeline.
+      - name: Test
+        run: dotnet test Cbix.sln --no-build
+
+      # Runs after Test, deliberately: a step earlier in the job stops the run on
+      # failure, so a format violation ahead of Test would hide every test result
+      # behind an unrelated whitespace complaint. Test results must always be
+      # visible even when formatting is the thing that ultimately fails the job.
+      - name: Format check
+        run: dotnet format Cbix.sln --verify-no-changes --no-restore

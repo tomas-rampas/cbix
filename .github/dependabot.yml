@@ -1,0 +1,14 @@
+# Bump PRs for the things ci.yml now pins to exact versions (SHA-pinned actions,
+# packages.lock.json-locked NuGet dependencies). Pinning without a renewal path just
+# freezes the repo at today's versions forever, so both ecosystems get weekly checks.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"

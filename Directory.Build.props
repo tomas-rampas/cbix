@@ -46,6 +46,20 @@
   </PropertyGroup>
 
   <!--
+    Audit gate strength, made explicit rather than left to inherited SDK defaults:
+    NuGetAudit=true runs the advisory check at all; NuGetAuditMode=all scans direct
+    AND transitive packages (not just direct); NuGetAuditLevel=low reports every
+    severity, low upward, so nothing below Moderate is silently dropped. CI's
+    dedicated audit step (S01-03) additionally promotes NU1901-1904 to errors for
+    that step only, per the WarningsNotAsErrors exemption above.
+  -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+  </PropertyGroup>
+
+  <!--
     Apply the repo-root .runsettings to every test project so a plain `dotnet test`
     gets it with no settings flag on the command line. Its main job is disabling Azure
     Application Insights telemetry (no-Azure hard constraint); see the comment in
