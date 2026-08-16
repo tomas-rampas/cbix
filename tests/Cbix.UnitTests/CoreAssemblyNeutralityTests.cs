@@ -63,6 +63,36 @@ public sealed class CoreAssemblyNeutralityTests
         "UglyToad.PdfPig.DocumentLayoutAnalysis",
         "UglyToad.PdfPig.Tokens",
 
+        // Added deliberately for story S01-06, following the same procedure. PDFtoImage is a local
+        // page rasteriser - PDFium behind a managed wrapper - and it passes the same test PdfPig
+        // does: MIT, entirely offline, no network call, and it names no model provider. It is also
+        // provider-invariant by role, and pointedly so: the profile that uses it is the AGNOSTICISM
+        // FALLBACK, the one that must work when no provider SDK is present at all. A dependency
+        // whose only consumer exists to remove a vendor dependency cannot itself create one.
+        //
+        // One entry, and this is measured rather than assumed. PDFtoImage's own transitive closure
+        // is large - SkiaSharp plus six native asset packages - but Cbix.Core emits a reference to
+        // exactly one assembly of it, because the rendering code names only PDFtoImage's own types.
+        // The one place that could have gone differently is RenderOptions: its positional
+        // constructor takes SkiaSharp.SKColor and System.Drawing.RectangleF, so constructing it
+        // positionally would have pulled SkiaSharp into this list. PdfiumPageImageRenderer builds it
+        // with a `with` expression on a default instance instead, which names neither - see the
+        // comment there. If that ever changes, this test is what will say so.
+        "PDFtoImage",
+
+        // Added deliberately for story S01-06 alongside PDFtoImage, and NOT as an oversight in the
+        // first pass. The original entry claimed Core emitted a reference to PDFtoImage alone, which
+        // was true while rendering used the per-page SavePng(Stream, ...) overload. That overload
+        // re-parses the whole document once per page - quadratic work on input an outside party
+        // supplies - so it was replaced by ToImagesAsync, which parses once and yields
+        // SkiaSharp.SKBitmap. Encoding those to PNG names SKData and SKEncodedImageFormat too.
+        // Naming SkiaSharp is therefore the price of a security fix, taken knowingly.
+        //
+        // It passes the same test PdfPig and PDFtoImage pass: a local, offline 2D graphics library,
+        // author-signed by Microsoft Corporation, MIT, that names no model provider and makes no
+        // network call.
+        "SkiaSharp",
+
         "netstandard",
         "mscorlib",
     ];
@@ -85,6 +115,32 @@ public sealed class CoreAssemblyNeutralityTests
             offenders.Count == 0,
             $"'{core.GetName().Name}' references assemblies outside the neutral set: {string.Join(", ", offenders)}. "
                 + "Provider SDKs belong in a provider adapter project, never in Core.");
+    }
+
+    [Fact]
+    public void CoreAssembly_DoesNotReferenceTheWindowsOnlyDrawingStack()
+    {
+        // Closes a gap the allowlist above cannot see. IsAllowed passes ANY assembly whose name
+        // starts with "System.", which is right for the BCL but means new System.* dependencies
+        // co-travel invisibly - nobody reviews an addition the test never reports. That already
+        // happened here: PDFtoImage's GetPageSizes returns IList<System.Drawing.SizeF>, so reading
+        // page geometry for the render ceilings pulled System.Drawing.Primitives into Core without a
+        // word from any test.
+        //
+        // System.Drawing.Primitives is harmless - SizeF and RectangleF, pure value types, no native
+        // code. System.Drawing.COMMON is not: it is GDI+, it is Windows-only on .NET 7 and later
+        // (it throws PlatformNotSupportedException everywhere else), and Core has to run in a
+        // linux-x64 container. Arriving here it would build cleanly, pass every test on a developer's
+        // Windows box, and fail in CI or production - the worst failure shape available. The
+        // rasteriser is exactly the kind of code that could acquire it by accident.
+        //
+        // Named specifically rather than by a "no System.Drawing.*" prefix rule, because Primitives
+        // is legitimately present and a prefix ban would fail on it.
+        Assembly core = typeof(IDocumentContentProvider).Assembly;
+
+        Assert.DoesNotContain(
+            core.GetReferencedAssemblies(),
+            reference => string.Equals(reference.Name, "System.Drawing.Common", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -8,6 +8,29 @@ updates:
     schedule:
       interval: "weekly"
 
+  # UNVERIFIED, and the consequence is not cosmetic: it is not established that Dependabot can
+  # raise a bump PR for a Central Package Management pin written in BRACKET notation. Several
+  # entries in Directory.Packages.props use `[x.y.z]` deliberately - a bare version in NuGet is a
+  # MINIMUM, so only a bracket delivers an exact pin for an unlocked local restore. PDFtoImage in
+  # particular is bracket-pinned to hold an N-1 "soak" decision (5.3.0 rather than a same-day
+  # 5.4.0), which a floating restore would silently undo.
+  #
+  # The risk this note records: if Dependabot cannot rewrite bracket pins, those packages get no
+  # bump PRs at all, and a deliberate soak decision quietly becomes a permanent freeze - the exact
+  # failure this file was added to prevent, arriving silently because a tool that raises no PR looks
+  # identical to a tool with nothing to raise.
+  #
+  # Backstop while it is unverified: the native rendering stack already carries a MANUAL review
+  # obligation with a cadence (design doc §11 addendum) - PDFium CVEs are filed upstream against
+  # Chromium, not against the NuGet package id, so they are invisible to both Dependabot and the
+  # NuGet audit gate regardless of how the pin is written. That obligation covers PDFtoImage,
+  # SkiaSharp and bblanchon.PDFium; the remaining bracket pins (MAF and the Anthropic integration)
+  # are prerelease packages design §11 already says to bump deliberately.
+  #
+  # To verify: watch for a bump PR against a bracket-pinned package after its next upstream release,
+  # or test against a scratch repository. If Dependabot cannot handle them, the choice is an
+  # explicit manual cadence for those packages or moving the exactness enforcement entirely onto the
+  # committed lock files plus CI locked restore.
   - package-ecosystem: "nuget"
     directory: "/"
     schedule:

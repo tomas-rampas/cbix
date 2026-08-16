@@ -62,6 +62,91 @@
          the eval harness exists there is no way to see the damage at all. Bump deliberately
          or not at all. -->
     <PackageVersion Include="PdfPig" Version="0.1.15" />
+    <!-- Page rasterisation for the generic-vision document-content profile (design 5.1, story
+         S01-06). PDFPig parses PDFs but cannot render them, and the agnosticism fallback has to
+         send page IMAGES: the permission matrix is a visual table, and a provider without a native
+         PDF mode reads it only if something locally turns each page into pixels.
+
+         Why PDFtoImage, with the evidence the choice was made on (all measured 2026-08-16 against
+         nuget.org, not recalled):
+
+           - Renderer quality, which is the actual driver. It wraps PDFium - the renderer Chrome
+             ships - so table rules, cell alignment and small type come out the way a human sees
+             them in a viewer. Sprint 02's Matrix agent has to read 8-10pt cells off these images;
+             a renderer with layout gaps would be paid for in matrix cell accuracy, the PoC's
+             headline metric.
+           - Supply chain, which is why 5.3.0 and not 5.4.0. PDFtoImage is AUTHOR-signed
+             (CN="Open Source Developer, David Sungaila", Certum) as well as repository-signed by
+             nuget.org - measured with `dotnet nuget verify` in all-checks mode (the double-dash
+             flag is spelled out rather than written literally: two consecutive hyphens end an XML
+             comment, and MSBuild reports it as every package having no version) - a stronger posture
+             than several packages already in this graph (Reqnroll is repository-signed only). It
+             is MIT, 6.66M downloads, and its source repo is named in the nuspec with a commit sha.
+             5.4.0 was published 2026-08-16T19:29Z, hours before this pin was chosen; 5.3.0 was
+             published 2026-07-28. A zero-soak release is precisely the window in which a
+             compromised-maintainer package is live and unreported, and nothing in 5.4.0's release
+             notes is needed here, so the soaked version is the one taken.
+           - Linux CI, verified rather than assumed. `runs-on: ubuntu-latest`, so a rasteriser whose
+             native library will not load there is a broken gate, not an inconvenience. Measured in
+             a linux-x64 container against the real DE specimen: the render produces PNGs (see the
+             note on PdfiumPageImageRenderer). bblanchon.PDFium.Linux ships
+             runtimes/linux-x64/native/libpdfium.so, and PDFtoImage takes
+             SkiaSharp.NativeAssets.Linux.NoDependencies - the self-contained variant that does not
+             need libfontconfig on the image.
+
+         Transitive closure on net10.0 (from the 5.3.0 nuspec's net10.0 group, which exists - this
+         is not a package resolving an older group by fallback): SkiaSharp 4.150.1 plus its
+         Win32/macOS/Linux.NoDependencies native asset packages, and bblanchon.PDFium
+         Win32/macOS/Linux 152.0.7961. The SkiaSharp packages are author-signed by Microsoft
+         Corporation.
+
+         ACCEPTED RESIDUAL RISK, stated rather than glossed: bblanchon.PDFium.* is
+         repository-signed only - no author signature - and it is the package that carries the
+         native code. Provenance is otherwise good (Apache-2.0, built in public CI from Google's
+         pdfium sources at a nuspec-named commit, 8.10M downloads on the Linux package alone), and
+         the mitigations are the same ones this repo already relies on for Reqnroll: an exact pin,
+         a committed lock file, locked-mode restore in CI, and a single pinned feed.
+
+         Bracket notation, deliberately - the second use in this file after the MAF pins. A bare
+         version in NuGet is a MINIMUM, so a developer's unlocked local restore would quietly float
+         this to 5.4.0 and undo the soak decision above, which is the entire point of choosing N-1.
+         The bracket makes "we took the soaked build" a fact about every restore rather than about
+         CI's.
+
+         Why this does not weaken LLM-agnosticism, by the same test PdfPig passes: PDFium and Skia
+         are local, offline rendering libraries. They name no model provider, make no network call,
+         and are needed identically under any vision-capable provider - the profile that uses them
+         exists precisely to work when no provider SDK is available. Extending
+         CoreAssemblyNeutralityTests' allowlist for them is the deliberate act that list's procedure
+         describes.
+
+         Upgrade procedure: PDFium rendering is an input to matrix extraction, so a version bump
+         changes the pixels the Matrix agent reads. Bump deliberately, and require a green
+         golden-set run before it ships (CLAUDE.md quality gate). -->
+    <PackageVersion Include="PDFtoImage" Version="[5.3.0]" />
+    <!-- Referenced DIRECTLY rather than left to arrive through PDFtoImage, by the same rule the MAF
+         pins below state: a type named in our own code should not arrive by accident. It IS named
+         in our own code, unavoidably - PDFtoImage's single-parse rendering entry point
+         (`ToImagesAsync`) yields `SkiaSharp.SKBitmap`, and PNG encoding goes through `SKData` and
+         `SKEncodedImageFormat`. The single-parse API is a security requirement, not a preference
+         (the per-page `SavePng` overload re-parses the whole document per page - quadratic work on
+         attacker-controlled input), so naming these types is the price of that fix and
+         CoreAssemblyNeutralityTests' allowlist gains SkiaSharp deliberately.
+
+         Neutral by the same test PdfPig and PDFtoImage pass: a local, offline 2D graphics library
+         that names no model provider and makes no network call. Author-signed by Microsoft
+         Corporation as well as repository-signed (measured with `dotnet nuget verify`, all-mode),
+         MIT, 313M downloads. Note the prose there rather than the flag spelling: a literal double
+         hyphen terminates an XML comment, and MSBuild's report of that is every package in this
+         file appearing to have no version (NU1015), which names nothing about the real cause. It
+         has now cost two debugging detours in this file; write the flag out in words.
+
+         Version 4.150.1 is exactly what PDFtoImage 5.3.0's net10.0 dependency group resolves, and
+         the two MUST move together: a mismatch between the managed SkiaSharp assembly and the
+         native libSkiaSharp the asset packages ship is a load failure at render time, not a
+         compile error. The bracket pin makes that lockstep mechanical - bump PDFtoImage and this
+         restore fails loudly until this pin is moved to match, which is the intended behaviour. -->
+    <PackageVersion Include="SkiaSharp" Version="[4.150.1]" />
   </ItemGroup>
 
   <ItemGroup Label="Provider adapter (Anthropic) - story S01-08">

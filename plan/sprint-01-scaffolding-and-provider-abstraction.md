@@ -316,7 +316,10 @@ Feature: Ingest triggers Claude upload
     And the resulting file_id is attached to the run's document handle for downstream agents
 ```
 
-Done means: the document handle produced here is what triage (S01-14) and the DocControl agent (S01-16) consume.
+Done means:
+- The document handle produced here is what triage (S01-14) and the DocControl agent (S01-16) consume.
+- **Binding obligation (measured, Sprint 01 S01-05 review):** MAF's Anthropic integration SILENTLY DROPS an `AIContent` whose only payload is `RawRepresentation` — the prepared document block does NOT reach `/v1/messages` by attaching it to a `ChatMessage`. Every agent call that must see the document has to attach the block via `ChatOptions.RawRepresentationFactory` (see `ClaudeDocumentContentProvider`'s remarks). A consumer that skips this gets a run where every agent answers confidently about a document it was never shown. This story must wire that attachment (or the seam for it) and prove on the wire that the document block is present in an agent request.
+- **Companion obligation (1h cache TTL):** the document block carries `cache_control` with `ttl: "1h"`, which is a beta the *message* request must opt into via the `extended-cache-ttl-2025-04-11` beta header — a request carrying the block without that header is REFUSED by the API, not silently downgraded. The attaching call site owns sending the header; the wire evidence must show it.
 
 ---
 
@@ -340,7 +343,10 @@ Feature: Minimal workflow topology
     And a downstream stub executor receives the triage output
 ```
 
-Done means: this topology is the one S01-09's agnosticism proof runs against, and the one S01-16 extends with the real DocControl agent.
+Done means:
+- This topology is the one S01-09's agnosticism proof runs against, and the one S01-16 extends with the real DocControl agent.
+- **Composition ownership (recorded from Sprint 01 reviews):** `AddCbixWorker` currently registers only `TimeProvider`, `ISecretResolver`, `AnthropicAgentFactory` and the hosted worker — the ingest stack (`DocumentIngestService`, registry, audit log, `ITextLayerExtractor`, `DocumentIngestOptions`) and the document-content profiles are NOT yet in the container. Wiring them into the composed graph is this story's scope, so the gap between "S01-10/11/17 done" and "the host can actually ingest" has an owner. The workflow-graph composition itself lands in `Cbix.Core` per the CLAUDE.md composition-root note. Profile registrations must be run-scoped with a test asserting the scope (a singleton registration would retain every document's rendered pixels for process lifetime — S01-06 security review).
+- **Cache-priming stagger (recorded from S01-05 review):** an Anthropic prompt-cache entry becomes readable only after the response that writes it has begun, so a simultaneous seven-way fan-out all cache-misses and pays the write premium instead of collecting the discount. Realising the cache saving requires the topology to stagger: one call (triage is the natural candidate) primes the cache, the section fan-out follows. This is a scheduling decision this story (and Sprint 02's full fan-out) owns; the cost of ignoring it is measured money, not correctness.
 
 ---
 
@@ -415,7 +421,9 @@ Feature: DocControl agent end-to-end
     And every SourceSnippet appears verbatim on its reported SourcePage of the PDFPig text layer
 ```
 
-Done means: this is the first agent whose output is later fed to the validator (Sprint 02) — its `ExtractedField<T>` shape must match design §5.4 exactly so the grounding gate can consume it unchanged.
+Done means:
+- This is the first agent whose output is later fed to the validator (Sprint 02) — its `ExtractedField<T>` shape must match design §5.4 exactly so the grounding gate can consume it unchanged.
+- Inherits S01-12's `RawRepresentationFactory` obligation: the DocControl agent call must attach the prepared document block via `ChatOptions.RawRepresentationFactory` and the story's wire evidence must show the document block in the outbound request — a green extraction with no document block means the model hallucinated the answers.
 
 ---
 

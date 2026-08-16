@@ -26,7 +26,7 @@ Milestones M0–M3 map 1:1 to design §10's delivery phases.
 
 **Sprints:** 03–05 (3 sprints).
 
-**Entry condition:** data-governance sign-off for real documents (direct API or Bedrock/Vertex route per design §8).
+**Entry condition:** data-governance sign-off for real documents (direct API or Bedrock/Vertex route per design §8). That sign-off must explicitly cover the **provider-side artefact lifecycle** (raised by the S01-05 security review): every run uploads the source PDF to the Anthropic Files API, where it persists until deleted — no TTL, no inventory, and the `file_id` is checkpointed. Before any real document is processed, a deletion/retention policy for those third-party copies must exist and be implemented or consciously waived; design §11's retention question covers the bank's copies, not these.
 
 **Scope:** five pilot jurisdictions spanning layout variety, 100% human review, a real review UI, backfill of those jurisdictions' current versions.
 

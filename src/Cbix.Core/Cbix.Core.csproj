@@ -18,6 +18,15 @@
          the grounding corpus is the same under every provider profile. See the rationale on the
          PackageVersion entry in /Directory.Packages.props. -->
     <PackageReference Include="PdfPig" />
+    <!-- Local page rasterisation (PDFium via SkiaSharp) for the generic-vision profile: PdfPig
+         reads a PDF but cannot draw one. Offline and provider-neutral, same test as PdfPig above;
+         see the rationale and the supply-chain evidence on the PackageVersion entry in
+         /Directory.Packages.props. -->
+    <PackageReference Include="PDFtoImage" />
+    <!-- Named directly by the renderer: PDFtoImage's single-parse rendering API yields SKBitmap and
+         PNG encoding goes through SKData. Transitive would compile identically; declaring it is how
+         the version stays pinned in lockstep with PDFtoImage's native assets. -->
+    <PackageReference Include="SkiaSharp" />
   </ItemGroup>
 
 </Project>
