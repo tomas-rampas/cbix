@@ -27,6 +27,65 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
   </ItemGroup>
 
+  <ItemGroup Label="Provider adapter (Anthropic) - story S01-08">
+    <!--
+      Both MAF packages are referenced DIRECTLY, not left to arrive through the Anthropic
+      integration, because between them they declare the type the adapter's public signature
+      returns - the neutral currency the rest of the solution speaks. A type in our own API
+      surface should not arrive by accident.
+        - Microsoft.Agents.AI.Abstractions declares AIAgent itself (verified: the S01-08
+          scenario asserts on the declaring assembly, and caught the assumption that it lived
+          in Microsoft.Agents.AI).
+        - Microsoft.Agents.AI declares ChatClientAgent, the concrete type AsAIAgent hands back
+          and which the adapter widens to AIAgent.
+      Note the version scheme: both core packages are STABLE at 1.17.0 while the Anthropic
+      integration below is still prerelease. That maturity gap is exactly the design 11
+      caution, and it is why the integration is quarantined in its own assembly.
+
+      Bracket notation is deliberate here and nowhere else in this file. A bare version in
+      NuGet is a MINIMUM, not an exact pin; the entries above accept that because they are
+      mature packages on a stable line. Design 11 requires exact pinned versions for MAF
+      and its provider integration specifically, and `[x]` is the only notation that
+      actually delivers one for a local (unlocked) restore. CI's locked restore would catch
+      drift after the fact; the bracket prevents it in the first place.
+    -->
+    <PackageVersion Include="Microsoft.Agents.AI.Abstractions" Version="[1.17.0]" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="[1.17.0]" />
+    <!--
+      MAF's first-party Anthropic integration (design 7). PRERELEASE - there is no stable
+      line to move to, which is the whole reason design 11 says to pin exactly and expect
+      breaking changes on upgrade. This version resolves Microsoft.Agents.AI 1.17.0 and
+      the official Anthropic .NET SDK 12.35.1 (pinned directly below).
+
+      Upgrade procedure: bump this pin, check whether the integration's dependency group
+      moved the `Anthropic` version and bump that pin to match, then require a green
+      golden-set run before shipping (CLAUDE.md quality gate).
+    -->
+    <PackageVersion Include="Microsoft.Agents.AI.Anthropic" Version="[1.17.0-preview.260804.1]" />
+    <!--
+      The official Anthropic .NET SDK. Pinned exactly and referenced DIRECTLY by the adapter,
+      which is an accurate statement of what the code does: `AsAIAgent` is an extension on
+      IAnthropicClient, so the adapter must construct an AnthropicClient and its ClientOptions
+      itself. Those SDK types are named in AnthropicAgentFactory today.
+
+      Two things this pin does NOT do, stated plainly because an earlier version of this
+      comment got both wrong:
+        - It does not weaken containment. Containment was never a property of the package
+          graph: a transitively-supplied assembly is fully compilable-against, so any project
+          could have named these types whether or not it declared a PackageReference. What
+          actually enforces containment is the reference-table assertion in
+          ProviderContainmentTests / the S01-08 BDD scenario, which fails if any assembly
+          outside the adapter emits a reference to `Anthropic` or
+          `Microsoft.Agents.AI.Anthropic`.
+        - Conversely, leaving it transitive did not pin the version. The MAF integration
+          declares `Anthropic >= 12.35.1`, so a lock regeneration would float it upward
+          silently. The exact pin plus CI's locked restore is what holds the version still -
+          which matters because the adapter depends on measured SDK behaviour (see the
+          ambient-credential remarks on AnthropicProviderOptions).
+    -->
+    <PackageVersion Include="Anthropic" Version="[12.35.1]" />
+  </ItemGroup>
+
   <ItemGroup Label="Test">
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

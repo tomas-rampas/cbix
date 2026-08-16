@@ -18,6 +18,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cbix.Core\Cbix.Core.csproj" />
+    <!-- Story S01-08. The adapter is referenced for its construction tests; Worker is referenced
+         so the containment backstop can reflect over the host's emitted reference table. Neither
+         reference weakens the neutrality guarantee: the assertions are about what
+         Cbix.Core and Cbix.Worker reference, and a test project's own references are not part of
+         that graph. -->
+    <ProjectReference Include="..\..\src\Cbix.Providers.Anthropic\Cbix.Providers.Anthropic.csproj" />
+    <ProjectReference Include="..\..\src\Cbix.Worker\Cbix.Worker.csproj" />
   </ItemGroup>
 
 </Project>

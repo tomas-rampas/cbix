@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TargetFramework, Nullable, ImplicitUsings, LangVersion and
+       TreatWarningsAsErrors come from /Directory.Build.props. -->
+  <PropertyGroup>
+    <RootNamespace>Cbix.Providers.Anthropic</RootNamespace>
+    <AssemblyName>Cbix.Providers.Anthropic</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The ONE assembly in the solution allowed to name an Anthropic type. That is not a
+         convention: CoreAssemblyNeutralityTests keeps Cbix.Core's reference set closed, and
+         the S01-08 containment scenario asserts that neither Cbix.Core nor Cbix.Worker emits
+         a reference to Microsoft.Agents.AI.Anthropic or to the Anthropic SDK it wraps.
+         Adding this package to any other project breaks those tests by construction. -->
+    <PackageReference Include="Microsoft.Agents.AI.Anthropic" />
+    <!-- The Anthropic SDK itself. Direct because this project genuinely names AnthropicClient
+         and ClientOptions - AsAIAgent is an extension on IAnthropicClient, so there is no way
+         to reach it without constructing the client. Declaring it makes the exact-version pin
+         effective (the MAF integration only requires >= 12.35.1); see /Directory.Packages.props. -->
+    <PackageReference Include="Anthropic" />
+    <!-- Direct, because between them these declare this project's public return type:
+         AIAgent (Abstractions) and the ChatClientAgent the integration hands back and the
+         adapter widens (Microsoft.Agents.AI). See /Directory.Packages.props for why a type
+         in our own API surface is not left to arrive transitively. -->
+    <PackageReference Include="Microsoft.Agents.AI.Abstractions" />
+    <PackageReference Include="Microsoft.Agents.AI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core supplies the provider-neutral contracts this adapter will implement: S01-05
+         hosts the Claude document-content profile (IDocumentContentProvider) here. The
+         dependency points adapter -> Core and never the reverse; Core must not learn that
+         a provider exists. -->
+    <ProjectReference Include="..\Cbix.Core\Cbix.Core.csproj" />
+  </ItemGroup>
+
+</Project>

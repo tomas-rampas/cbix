@@ -17,6 +17,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cbix.Core\Cbix.Core.csproj" />
+    <!-- Referenced so the S01-08 containment scenario can reflect over what the compiler
+         actually emitted into the host's reference table. Worker is the composition host:
+         it may legitimately reference the provider adapter PROJECT, but must never name an
+         Anthropic TYPE - and only its own assembly metadata can settle that. -->
+    <ProjectReference Include="..\..\src\Cbix.Worker\Cbix.Worker.csproj" />
+    <!-- The adapter under test in S01-08. Referenced so the scenario can load it and so the
+         guard-the-guard step can prove the containment assertion is not vacuous. The bindings
+         still resolve every adapter type by reflection: a compile-time reference here would
+         make a missing adapter a build break rather than the failing assertion BDD requires. -->
+    <ProjectReference Include="..\..\src\Cbix.Providers.Anthropic\Cbix.Providers.Anthropic.csproj" />
   </ItemGroup>
 
 </Project>

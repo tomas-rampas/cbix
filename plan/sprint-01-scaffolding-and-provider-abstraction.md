@@ -193,7 +193,7 @@ Done means: the eval harness (Sprint 02) is expected to consume this flag when i
 
 ---
 
-### [ ] S01-08 — Anthropic provider adapter via `Microsoft.Agents.AI.Anthropic`
+### [x] S01-08 — Anthropic provider adapter via `Microsoft.Agents.AI.Anthropic`
 
 As a developer
 I want the Claude model client wired through `Microsoft.Agents.AI.Anthropic`'s `AnthropicClient.AsAIAgent(...)`
