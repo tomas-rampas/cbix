@@ -319,6 +319,14 @@ public sealed class AnthropicProviderOptions
     {
         const string ConflictingVariable = "ANTHROPIC_AUTH_TOKEN";
 
+        // IsNullOrEmpty here, IsNullOrWhiteSpace everywhere else in this type, and the difference is
+        // deliberate: this predicate has the OPPOSITE polarity to its siblings. They ask "is a
+        // REQUIRED value missing" and must treat "   " as missing. This asks "is a FORBIDDEN value
+        // PRESENT" and must treat "   " as present - it is a variable somebody exported, which is
+        // exactly the explicit intent the guard exists to surface. Measured:
+        // !IsNullOrWhiteSpace(" ") is false, so switching to the sibling predicate would make a
+        // single space slip the guard, weakening it rather than aligning it. Pinned by the
+        // whitespace case in WorkerCompositionTests, which fails if this is "made consistent".
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(ConflictingVariable)))
         {
             throw new InvalidOperationException(

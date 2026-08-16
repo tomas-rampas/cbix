@@ -9,6 +9,7 @@ using Cbix.Worker;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Cbix.UnitTests.Hosting;
 
@@ -220,6 +221,45 @@ public sealed class WorkerCompositionTests : IDisposable
     }
 
     [Fact]
+    public void AddCbixWorker_RefusesTheAliasNameInATrackedFileEvenWhenTheScopedKeyIsApproved()
+    {
+        // Regression for a governance sweep that short-circuited ACROSS sources. LayeredSecretResolver
+        // returns at the first source that answers, so once the scoped key resolved from an approved
+        // provider the alias source never ran - and its sweep of the ANTHROPIC_API_KEY name never
+        // happened. Measured before the fix: this exact configuration composed cleanly and the host
+        // STARTED (exit 124 on a timeout, zero refusals) with a credential sitting in appsettings.json.
+        //
+        // That is not a contrived shape. It is a correctly configured deployment that also happens to
+        // have a key committed - the case the run-time guard exists for, because no static scan of
+        // this repository can see an operator-edited shipped config or a baked image layer.
+        SecretGovernanceException error = Assert.Throws<SecretGovernanceException>(
+            () => Compose(
+                TrackedConfigurationFile(
+                    "appsettings.json",
+                    $$"""{ "ANTHROPIC_API_KEY": "{{PlaceholderApiKey}}" } """),
+                SecretsManagerSource(PlaceholderApiKey)).Dispose());
+
+        Assert.Contains("appsettings.json", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(PlaceholderApiKey, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddCbixWorker_SweepsTheAliasNameEvenWhenTheScopedKeyResolvesFirst()
+    {
+        // The same defect stated as a property rather than a scenario: the sweep must be unconditional
+        // per resolution of the Anthropic key, not contingent on which source ends up answering. Here
+        // the alias sits on the command line - a channel that is refused outright - while the scoped
+        // key resolves from an approved source, so a passing composition would prove the sweep was
+        // skipped.
+        SecretGovernanceException error = Assert.Throws<SecretGovernanceException>(
+            () => Compose(
+                builder => builder.AddCommandLine([$"--ANTHROPIC_API_KEY={PlaceholderApiKey}"]),
+                SecretsManagerSource(PlaceholderApiKey)).Dispose());
+
+        Assert.Contains("CommandLineConfigurationProvider", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AddCbixWorker_RefusesAKeySuppliedOnTheCommandLine()
     {
         // The command-line provider is registered last and outranks everything, and process
@@ -307,19 +347,59 @@ public sealed class WorkerCompositionTests : IDisposable
         Assert.Contains("MaxOutputTokens", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AddCbixWorker_FailsAtStartupWhenAConflictingAmbientCredentialIsSet()
+    [Theory]
+    [InlineData("an-ambient-oauth-token")]
+    [InlineData(" ")]
+    public void AddCbixWorker_FailsAtStartupWhenAConflictingAmbientCredentialIsSet(string token)
     {
         // Proves the adapter's ambient-environment guard runs during composition rather than at
         // first use. ANTHROPIC_AUTH_TOKEN makes the SDK send Authorization: Bearer alongside
         // X-Api-Key, and the API rejects the pair - a 401 that would otherwise land mid-run.
+        //
+        // The whitespace case pins a deliberate asymmetry that looks like an inconsistency. The
+        // guard uses IsNullOrEmpty while every sibling check in AnthropicProviderOptions uses
+        // IsNullOrWhiteSpace - because this predicate has the opposite polarity. The siblings ask
+        // "is a REQUIRED value missing"; this asks "is a FORBIDDEN value PRESENT", and a variable
+        // exported as a single space IS present. Measured: !IsNullOrWhiteSpace(" ") is false, so
+        // "aligning" the two predicates lets " " slip the guard. This case fails if anyone does.
         using EnvironmentVariableScope scope = new();
-        scope.Set("ANTHROPIC_AUTH_TOKEN", "an-ambient-oauth-token");
+        scope.Set("ANTHROPIC_AUTH_TOKEN", token);
 
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(
             () => Compose(SecretsManagerSource(PlaceholderApiKey)).Dispose());
 
         Assert.Contains("ANTHROPIC_AUTH_TOKEN", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddCbixWorker_RecordsTheResolvedEndpointAtStartup()
+    {
+        // A configured BaseUrl is a blessed redirect (design 8 anticipates an approved egress
+        // proxy), but before this event it was a SILENT one: the API key and the document content
+        // would go to another host with nothing anywhere to say so. The event is what makes it
+        // observable.
+        CapturingLoggerProvider capture = new();
+
+        using IHost host = Compose(
+            capture,
+            TrackedConfigurationFile(
+                "appsettings.json",
+                $$"""{ "Cbix": { "Providers": { "Anthropic": { "BaseUrl": "{{UnroutableEndpoint}}" } } } }"""),
+            SecretsManagerSource(PlaceholderApiKey));
+
+        // Resolving the hosted services is what a starting host does, and the registration
+        // deliberately touches the factory there - so this asserts the event is a STARTUP event and
+        // not one that fires whenever something first needs an agent.
+        _ = host.Services.GetServices<IHostedService>().ToList();
+
+        Assert.Contains(
+            capture.Messages,
+            message => message.Contains(UnroutableEndpoint, StringComparison.Ordinal));
+
+        // Whatever else the run logs, the credential is not in it.
+        Assert.DoesNotContain(
+            capture.Messages,
+            message => message.Contains(PlaceholderApiKey, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -472,10 +552,21 @@ public sealed class WorkerCompositionTests : IDisposable
             new Dictionary<string, string?> { ["ANTHROPIC_API_KEY"] = apiKey });
 
     /// <summary>Builds the graph through the same entry point <c>Program.cs</c> uses.</summary>
-    private static IHost Compose(params Action<IConfigurationBuilder>[] sources)
+    private static IHost Compose(params Action<IConfigurationBuilder>[] sources) =>
+        Compose(loggerProvider: null, sources);
+
+    /// <summary>Builds the graph, optionally capturing what it logs.</summary>
+    private static IHost Compose(ILoggerProvider? loggerProvider, params Action<IConfigurationBuilder>[] sources)
     {
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-        builder.Services.AddLogging();
+
+        builder.Services.AddLogging(logging =>
+        {
+            if (loggerProvider is not null)
+            {
+                logging.AddProvider(loggerProvider).SetMinimumLevel(LogLevel.Information);
+            }
+        });
 
         foreach (Action<IConfigurationBuilder> source in sources)
         {
@@ -505,5 +596,62 @@ public sealed class WorkerCompositionTests : IDisposable
         File.WriteAllText(path, json);
 
         return builder => builder.AddJsonFile(path, optional: false, reloadOnChange: false);
+    }
+
+    /// <summary>Collects formatted log messages so a test can assert on what startup recorded.</summary>
+    /// <remarks>
+    /// Formatted rather than structured on purpose: the assertions are "does the endpoint appear"
+    /// and "does the credential not appear", and both are questions about the text an operator or a
+    /// log sink actually sees. A structured-state assertion would pass while the rendered message
+    /// leaked something.
+    /// </remarks>
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly List<string> _messages = [];
+
+        internal IReadOnlyList<string> Messages
+        {
+            get
+            {
+                lock (_messages)
+                {
+                    return [.. _messages];
+                }
+            }
+        }
+
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(this);
+
+        public void Dispose()
+        {
+            // Nothing to release: the sink is an in-memory list owned by the test.
+        }
+
+        private void Record(string message)
+        {
+            lock (_messages)
+            {
+                _messages.Add(message);
+            }
+        }
+
+        private sealed class CapturingLogger(CapturingLoggerProvider owner) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                ArgumentNullException.ThrowIfNull(formatter);
+                owner.Record(formatter(state, exception));
+            }
+        }
     }
 }

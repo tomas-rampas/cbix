@@ -97,11 +97,67 @@ public static class CbixWorkerHostExtensions
         // creates, and the factory owns an HTTP client that must be closed with the host. An
         // instance registered directly would never be disposed. Validation has already run, so
         // nothing is deferred except the allocation.
-        builder.Services.AddSingleton(_ => new AnthropicAgentFactory(options));
+        builder.Services.AddSingleton(serviceProvider =>
+        {
+            AnthropicAgentFactory factory = new(options);
+            EmitEndpointEvent(serviceProvider, factory);
+            return factory;
+        });
 
-        builder.Services.AddHostedService<Worker>();
+        builder.Services.AddHostedService(serviceProvider =>
+        {
+            // Resolving the factory here is deliberate, not incidental. It constructs the provider
+            // client - and so emits the endpoint event - during host start, rather than whenever
+            // something first happens to need an agent. An endpoint recorded after work has begun
+            // is not a startup record.
+            _ = serviceProvider.GetRequiredService<AnthropicAgentFactory>();
+
+            return ActivatorUtilities.CreateInstance<Worker>(serviceProvider);
+        });
 
         return builder;
+    }
+
+    /// <summary>
+    /// Records, once at startup, which endpoint every model call in this run will go to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>What this closes.</b> The endpoint is already protected against <em>ambient</em>
+    /// redirection - <c>ANTHROPIC_BASE_URL</c> was measured being ignored because the adapter always
+    /// sets the base URL explicitly. It is deliberately <em>not</em> protected against configured
+    /// redirection: <c>BaseUrl</c> in <c>appsettings.json</c>, or
+    /// <c>--Cbix:Providers:Anthropic:BaseUrl=...</c>, is a blessed configuration change, because
+    /// design 8 anticipates an approved egress proxy and pinning the endpoint must not mean
+    /// hard-coding it. The gap was that such a redirect left no trace at all: the API key and the
+    /// document content would go somewhere else and nothing would say so. One event makes a silent
+    /// redirect an observable one.
+    /// </para>
+    /// <para>
+    /// Safe to log: <see cref="AnthropicAgentFactory.ResolvedEndpoint"/> is documented as
+    /// credential-free, unlike the client options it derives from - whose <c>ToString()</c> was
+    /// measured printing the API key in clear.
+    /// </para>
+    /// <para>
+    /// <b>An endpoint allowlist was considered and deferred.</b> Refusing any host outside an
+    /// approved set is the stronger control, but the approved set is a deployment fact nobody has
+    /// yet - there is no egress proxy to name - so it would be invented rather than configured. It
+    /// belongs with the telemetry and observability story, where this event also gains a trace
+    /// attribute and the allowlist has a real source.
+    /// </para>
+    /// </remarks>
+    private static void EmitEndpointEvent(IServiceProvider serviceProvider, AnthropicAgentFactory factory)
+    {
+        ILogger<AnthropicAgentFactory> logger =
+            serviceProvider.GetRequiredService<ILogger<AnthropicAgentFactory>>();
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Anthropic provider endpoint resolved to {AnthropicEndpoint}. All model calls in this run "
+                    + "go to this host.",
+                factory.ResolvedEndpoint);
+        }
     }
 
     /// <summary>

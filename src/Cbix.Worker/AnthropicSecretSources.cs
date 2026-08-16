@@ -112,7 +112,17 @@ internal static class AnthropicSecretSources
                 "user-secrets (local development only), an environment variable, or the secrets-manager "
                     + $"configuration provider, under configuration key "
                     + $"'{CbixWorkerHostExtensions.AnthropicApiKeySecretName}'",
-                secretName => ReadFromApprovedProvider(configuration, secretName, secretName)),
+                secretName =>
+                {
+                    // Governance sweep of the ALIAS name, run here and not in the alias source
+                    // below. See SweepAliasName for why this placement is the whole fix.
+                    if (IsTheAnthropicApiKey(secretName))
+                    {
+                        SweepAliasName(configuration, secretName);
+                    }
+
+                    return ReadFromApprovedProvider(configuration, secretName, secretName);
+                }),
             new SecretSource(
                 $"the '{EnvironmentVariableName}' environment variable",
                 secretName => IsTheAnthropicApiKey(secretName)
@@ -126,6 +136,48 @@ internal static class AnthropicSecretSources
             secretName,
             CbixWorkerHostExtensions.AnthropicApiKeySecretName,
             StringComparison.Ordinal);
+
+    /// <summary>
+    /// Runs the provider governance sweep over the <c>ANTHROPIC_API_KEY</c> alias name, discarding
+    /// whatever value it finds.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists at all: the resolver short-circuits across sources.</b>
+    /// <see cref="LayeredSecretResolver"/> returns as soon as a source answers, which is correct for
+    /// <em>resolution</em> - once the scoped key is in hand there is nothing left to resolve. But the
+    /// governance check is a side effect of reading, so short-circuiting also skipped it. Measured:
+    /// <c>ANTHROPIC_API_KEY</c> planted in a tracked <c>appsettings.json</c> with an approved scoped
+    /// key present composed cleanly and started the host - no refusal, exit 0. That is not an exotic
+    /// configuration; it is the normal state of a correctly configured deployment that also happens
+    /// to have a credential committed, which is precisely the case the run-time guard exists for
+    /// (an operator-edited shipped config, or a baked image layer, that no static scan of this
+    /// repository can see).
+    /// </para>
+    /// <para>
+    /// <b>Why the sweep lives here rather than in the alias source.</b> It has to run on every
+    /// resolution of the Anthropic key, including - especially - the resolutions the alias source
+    /// never sees. The first source is the only one guaranteed to be consulted, so the sweep is
+    /// attached to it and runs <em>before</em> that source reads its own key, where no early return
+    /// can skip it. The alias source keeps its own read because it still has to produce the value
+    /// when the scoped key is absent.
+    /// </para>
+    /// <para>
+    /// <b>Why not simply evaluate every source unconditionally.</b> That was the obvious structural
+    /// alternative and it is worse: sources are allowed to throw when their store is unreachable, so
+    /// forcing all of them to run would let a vault outage fail a resolution the first source had
+    /// already satisfied. Turning an availability problem into a startup failure is a real
+    /// regression; this sweep touches only configuration providers that are already loaded in
+    /// memory, so it cannot fail for availability reasons.
+    /// </para>
+    /// <para>
+    /// The value is deliberately discarded. This is a check on <em>where a credential is sitting</em>,
+    /// not a second way to obtain one - a credential in a forbidden location is disclosed whether or
+    /// not this process would have used it.
+    /// </para>
+    /// </remarks>
+    private static void SweepAliasName(IConfiguration configuration, string secretName) =>
+        _ = ReadFromApprovedProvider(configuration, EnvironmentVariableName, secretName);
 
     /// <summary>
     /// Reads a configuration key, refusing the value outright if <em>any</em> provider carrying it
