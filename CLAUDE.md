@@ -6,13 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Pre-implementation.** There is no source code yet — no build, lint, or test commands exist. The repository contains the solution design and the golden-set seed data. Update this file with real commands once the .NET solution is scaffolded.
 
-- `docs/Cross_Border_Instruction_Extraction_Solution_Design.md` — the authoritative design (Draft v0.2). Read it before writing any code; every architectural decision below is elaborated there with rationale.
+- `docs/Cross_Border_Instruction_Extraction_Solution_Design.md` — the authoritative design (Draft v0.3). Read it before writing any code; every architectural decision below is elaborated there with rationale.
+- `plan/` — the implementation plan: `00-roadmap.md` (milestones M0–M3, sprint index, design-component coverage table, working agreements) plus story files `sprint-01…05`. **BDD is mandatory**: every story starts from a failing Reqnroll/xUnit Gherkin scenario; story checkboxes (`### [ ] Sxx-nn`) are ticked only when the roadmap's Definition of Done is fully met. Keep this plan current as stories complete.
 - `data/Cross_Border_Trading_Legal_Instruction_{DE,CH}_SPECIMEN.pdf` — synthetic specimen input documents (fictional "Contoso Bank"; no real data, so no data-governance restrictions).
 - `data/cbti_country_ground_truth.json` — golden set v0: the expected extraction for both specimens, pre-flattened to relational shape. DE has a 10 products × 4 MiFID II categories matrix (40 cells), CH has 10 × 3 FinSA categories (30 cells). The two categorisation schemes differ deliberately to exercise taxonomy normalisation.
 
 ## What CBIX is
 
-A pipeline that converts per-country Cross-Border Trading Legal Instruction PDFs into validated, audit-grade relational data. Planned stack: **.NET worker** using **Microsoft Agent Framework (MAF) Workflows** for orchestration, the **Anthropic Claude API** (via the official C# SDK's `Microsoft.Extensions.AI` `IChatClient` integration; community `Anthropic.SDK` is the fallback) for extraction, **PDFPig** for a local text layer, and **SQL Server** for checkpoints, staging, and the published schema. Hard constraint: **no Azure services**.
+A pipeline that converts per-country Cross-Border Trading Legal Instruction PDFs into validated, audit-grade relational data. Planned stack: **.NET worker** using **Microsoft Agent Framework (MAF) Workflows** for orchestration, the **Anthropic Claude API** via MAF's first-party provider integration (`Microsoft.Agents.AI.Anthropic`, prerelease — `AnthropicClient.AsAIAgent(...)`; no direct Anthropic SDK usage), **PDFPig** for a local text layer, and **SQL Server** for checkpoints, staging, and the published schema. Hard constraints: **no Azure services** (incl. no Foundry), and **LLM-agnosticism** — Anthropic types stay inside one provider adapter; everything else depends on `AIAgent`/`IChatClient` plus a capability profile (document presentation behind the `IDocumentContentProvider` port: Claude native-PDF profile, generic-vision profile, text-only fallback), so a provider swap (e.g. Groq via the OpenAI-compatible integration) is configuration, not code. Enforced by a CI run of the whole workflow against a stub `IChatClient`.
 
 ## Governing principle
 
@@ -46,6 +47,7 @@ Published tables (T-SQL sketch in design doc §6): `country_documents` (PK `doc_
 
 ## Engineering cautions from the design (§11)
 
-- MAF and the official Anthropic C# SDK are both young: pin package versions and model strings; wrap framework/provider types behind thin interfaces.
+- MAF and its `Microsoft.Agents.AI.Anthropic` integration are young (the latter is prerelease): pin exact package versions and model strings; keep provider types behind the adapter; expect breaking changes on upgrade.
+- Provider capability drift: matrix extraction quality is provider-dependent — the eval harness reports metrics per provider profile, and a profile swap requires a green regression run.
 - Don't trust model-reported confidence at face value — thresholds are calibrated against observed correction rates.
 - No cell bounding boxes from PDF mode: provenance is page + verbatim snippet, and the review UI locates sources by snippet text-match.
