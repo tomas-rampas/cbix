@@ -36,6 +36,11 @@ Feature: SQL Server checkpoint storage
 
 Done means: thin custom `CheckpointStorage` provider implemented if none ships for SQL Server out of the box, per design §5.2.
 
+Security obligations carried forward from Sprint 01 reviews (binding on this story):
+- Checkpoint rows will contain the full PDFPig text layer — client document content in production. Encryption-at-rest and a retention policy on the checkpoint store are part of this story's scope, not a later discovery (raised by the S01-11 security review; `DocumentIngestResult` was shaped for run-state carriage on this understanding).
+- The ingest refusal security events (EventIds 1010–1015 family) must be routed to operational logging/SIEM when the workflow host wires logging providers — refusals are the instrument that monitors the write-restricted-ingest-root deployment assumption (design §11 addendum).
+- `ISecretResolver` is registered container-wide; when agent executors join this container, scope credential-read access deliberately (raised by the S01-17 security review; recorded on the interface).
+
 ---
 
 ### [ ] S03-02 — Resume-after-crash: no repeated LLM calls

@@ -14,6 +14,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cbix.Core\Cbix.Core.csproj" />
+    <!-- Story S01-17. The host is where a provider is CHOSEN, so it is the one non-adapter project
+         that may reference the adapter project: Cbix.Core must never depend on a provider (enforced
+         by CoreAssemblyNeutralityTests and ProviderContainmentTests), which means provider selection
+         cannot live there. Referencing the project is not the same as naming an Anthropic type -
+         ProviderContainmentTests asserts on this assembly's emitted reference table, and fails the
+         moment a line of Worker code names a type from `Anthropic` or `Microsoft.Agents.AI.Anthropic`. -->
+    <ProjectReference Include="..\Cbix.Providers.Anthropic\Cbix.Providers.Anthropic.csproj" />
   </ItemGroup>
 
 </Project>

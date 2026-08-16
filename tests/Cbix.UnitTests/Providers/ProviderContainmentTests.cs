@@ -209,20 +209,18 @@ public sealed class ProviderContainmentTests
     public void NoTrackedConfigurationFileCarriesAnApiKey()
     {
         // Turns the "never from a tracked configuration file" comment on AnthropicProviderOptions
-        // into a control. It passes vacuously today because no such file exists yet - which is the
-        // correct state, and the assertion goes live the moment somebody adds one. The repo-root
-        // assertion below is what stops it passing because it searched nowhere.
+        // into a control. It is NOT vacuous: src/Cbix.Worker ships tracked appsettings.json and
+        // appsettings.Development.json, both of which this scan reads. The repo-root assertion
+        // below additionally stops it passing because it searched nowhere, and the file-count
+        // assertion stops a future reorganisation quietly emptying its input.
         string repositoryRoot = FindRepositoryRoot();
 
-        List<string> configurationFiles =
-        [
-            .. Directory.EnumerateFiles(repositoryRoot, "appsettings*.json", SearchOption.AllDirectories)
-                .Concat(Directory.EnumerateFiles(repositoryRoot, "launchSettings.json", SearchOption.AllDirectories))
-                // Build output contains copies of whatever is tracked; inspecting them would double-report
-                // and, worse, report a stale copy long after the source was cleaned up.
-                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)),
-        ];
+        List<string> configurationFiles = [.. EnumerateConfigurationAssets(repositoryRoot)];
+
+        Assert.True(
+            configurationFiles.Count > 0,
+            "No tracked configuration assets were found; the scan would report clean without "
+                + "having read anything.");
 
         List<string> offenders = [];
         foreach (string file in configurationFiles)
@@ -238,12 +236,73 @@ public sealed class ProviderContainmentTests
     }
 
     [Fact]
+    public void ConfigurationScan_DiscoversAFileMatchingEveryPattern()
+    {
+        // The discovery half of the positive control. The matcher test below proves the JSON walk
+        // fires; nothing proved that ENUMERATION does. A typo in one pattern - or a pattern that
+        // matches nothing on a case-sensitive file system - would silently narrow the scan while
+        // every assertion built on it kept passing, which is precisely how the
+        // {ApplicationName}.settings.json convention went unnoticed.
+        //
+        // Planted under a temporary root rather than inside the repository: the walk is identical,
+        // and scratch files in the working tree are exactly what .gitignore's blacklist makes
+        // invisible.
+        (string Pattern, string FileName)[] samples =
+        [
+            ("appsettings*.json", "appsettings.Production.json"),
+            ("*.settings.json", "Cbix.Worker.settings.json"),
+            ("launchSettings.json", "launchSettings.json"),
+            ("secrets.json", "secrets.json"),
+        ];
+
+        Assert.Equal(
+            ConfigurationAssetPatterns.Order(StringComparer.Ordinal),
+            samples.Select(sample => sample.Pattern).Order(StringComparer.Ordinal));
+
+        string root = Path.Combine(Path.GetTempPath(), $"cbix-asset-scan-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            foreach ((_, string fileName) in samples)
+            {
+                File.WriteAllText(Path.Combine(root, fileName), "{}");
+            }
+
+            // Build output must stay excluded: it holds copies of tracked files, so including it
+            // would report a stale leak long after the real file was cleaned up.
+            string buildOutput = Path.Combine(root, "bin", "Debug");
+            Directory.CreateDirectory(buildOutput);
+            File.WriteAllText(Path.Combine(buildOutput, "appsettings.json"), "{}");
+
+            List<string> discovered =
+            [
+                .. EnumerateConfigurationAssets(root).Select(path => Path.GetFileName(path)!),
+            ];
+
+            foreach ((string pattern, string fileName) in samples)
+            {
+                Assert.True(
+                    discovered.Contains(fileName, StringComparer.Ordinal),
+                    $"Pattern '{pattern}' did not discover '{fileName}', so that class of configuration "
+                        + "asset is not being scanned at all.");
+            }
+
+            Assert.Equal(samples.Length, discovered.Count);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ConfigurationScan_ActuallyDetectsAPlantedKey()
     {
-        // Positive control for the test above, which today scans a repository containing no
-        // appsettings/launchSettings files at all and so cannot distinguish "clean" from "broken".
-        // These are the two shapes a leaked key really takes: a bound configuration section, and an
-        // environment block in a launch profile.
+        // Matcher half of the positive control: the scan above passes over a repository that
+        // legitimately carries no credential, which is indistinguishable from a matcher that found
+        // nothing because it was broken. These are the two shapes a leaked key really takes: a bound
+        // configuration section, and an environment block in a launch profile.
         const string PlantedSection = """
             { "Cbix": { "Providers": { "Anthropic": { "ApiKey": "leaked", "ModelId": "fine" } } } }
             """;
@@ -267,6 +326,84 @@ public sealed class ProviderContainmentTests
         Assert.Equal(
             ["launchSettings.json:profiles:Cbix.Worker:environmentVariables:ANTHROPIC_API_KEY"],
             launchOffenders);
+    }
+
+    /// <summary>
+    /// File-name patterns for the configuration assets that could carry a credential into a commit,
+    /// a build output or an image layer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kept in step with the BDD asset scan</b> in <c>Cbix.Bdd</c>'s <c>SecretSourcingSteps</c>
+    /// (story S01-17), which walks the same repository with the same patterns plus the container
+    /// assets. Neither supersedes the other and both are needed: this one parses JSON, so it reports
+    /// the offending key path and cannot be fooled by formatting; that one is a text scan, so it
+    /// covers Dockerfiles and <c>.env</c> files that are not JSON at all. Change one, change the
+    /// other.
+    /// </para>
+    /// <para>
+    /// <c>*.settings.json</c> is on the list because <c>Host.CreateApplicationBuilder</c> was
+    /// measured loading <c>{ApplicationName}.settings.json</c> - and loading it at <em>higher</em>
+    /// precedence than <c>appsettings.json</c> (the shape is pinned by
+    /// <c>WorkerCompositionTests.DefaultHostConfiguration_LoadsThePinnedProviderShape</c>). A key
+    /// planted in <c>Cbix.Worker.settings.json</c> was a real, working leak that neither scan saw.
+    /// </para>
+    /// <para>
+    /// <c>secrets.json</c> is on the list for the mirror-image reason: the run-time provider
+    /// allowlist <em>approves</em> a file provider reading a file of that name, because user-secrets
+    /// lives outside the repository. A file with that name inside the repository would therefore be
+    /// trusted at run time, so it has to be refused here instead.
+    /// </para>
+    /// </remarks>
+    private static readonly string[] ConfigurationAssetPatterns =
+    [
+        "appsettings*.json",
+        "*.settings.json",
+        "launchSettings.json",
+        "secrets.json",
+    ];
+
+    /// <summary>Configuration assets under <paramref name="root"/>, excluding build output.</summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="MatchCasing.CaseInsensitive"/> is explicit rather than inherited. The default
+    /// follows the file system, which would make this scan case-sensitive on the Linux CI runner and
+    /// case-insensitive on a Windows developer machine - so <c>AppSettings.json</c> would be caught
+    /// locally and shipped by CI, or the reverse. The run-time provider allowlist compares file
+    /// names with <see cref="StringComparison.OrdinalIgnoreCase"/>, and a control that classifies
+    /// the same input differently per platform is not a control.
+    /// </para>
+    /// <para>
+    /// <see cref="EnumerationOptions.IgnoreInaccessible"/> keeps one unreadable directory from
+    /// aborting the whole walk, which would turn a partial scan into a green result.
+    /// </para>
+    /// </remarks>
+    private static IEnumerable<string> EnumerateConfigurationAssets(string root)
+    {
+        EnumerationOptions options = new()
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            MatchCasing = MatchCasing.CaseInsensitive,
+        };
+
+        return ConfigurationAssetPatterns
+            .SelectMany(pattern => Directory.EnumerateFiles(root, pattern, options))
+            .Where(IsNotBuildOutput)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Excludes build and VCS directories: they hold copies of whatever is tracked, so scanning them
+    /// would double-report and, worse, report a stale copy long after the source was cleaned up.
+    /// </summary>
+    private static bool IsNotBuildOutput(string path)
+    {
+        char separator = Path.DirectorySeparatorChar;
+
+        return !path.Contains($"{separator}bin{separator}", StringComparison.Ordinal)
+            && !path.Contains($"{separator}obj{separator}", StringComparison.Ordinal)
+            && !path.Contains($"{separator}.git{separator}", StringComparison.Ordinal);
     }
 
     /// <summary>Every member and type name referenced from an assembly's IL metadata.</summary>

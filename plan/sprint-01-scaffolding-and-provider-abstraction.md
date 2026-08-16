@@ -419,7 +419,7 @@ Done means: this is the first agent whose output is later fed to the validator (
 
 ---
 
-### [ ] S01-17 — Anthropic API key sourced from the secrets-manager pattern
+### [x] S01-17 — Anthropic API key sourced from the secrets-manager pattern
 
 As an operator
 I want the Anthropic API key read from the bank-standard secrets manager pattern, never from config files or baked into images
