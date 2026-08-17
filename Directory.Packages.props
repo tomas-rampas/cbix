@@ -18,6 +18,21 @@
          AIContent.RawRepresentation, never in a Core signature. -->
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <!-- DI abstractions only - IServiceCollection, IServiceProvider, ServiceDescriptor and the
+         TryAdd/keyed-service helpers. Cbix.Core needs it because CLAUDE.md puts workflow-graph
+         composition there (story S01-13): describing the graph's registrations means naming
+         IServiceCollection, while the container implementation, the host and the configuration
+         binding all stay on the host's side of the split.
+
+         Neutral by the same test the other Core dependencies pass: it names no model provider and
+         makes no network call, which is why adding it to CoreAssemblyNeutralityTests' allowlist is
+         a deliberate, commented act. A container IMPLEMENTATION would still not belong in Core.
+
+         Version matches the Hosting pin above rather than the 10.0.9 the MAF Workflows package
+         asks for: they resolve to one assembly in the graph regardless, and a Core pin BELOW the
+         host's would be a downgrade nobody chose. It arrives transitively either way; declaring it
+         is what makes the version a decision instead of an outcome. -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <!-- Logging abstractions only - ILogger/ILogger<T>, no sink, no provider. Cbix.Core needs it
          because a security refusal that is only an exception is invisible until something catches
          it: the ingest containment gate has to emit a structured event at the moment it refuses.
@@ -147,6 +162,74 @@
          compile error. The bracket pin makes that lockstep mechanical - bump PDFtoImage and this
          restore fails loudly until this pin is moved to match, which is the intended behaviour. -->
     <PackageVersion Include="SkiaSharp" Version="[4.150.1]" />
+    <!-- MAF's workflow engine (design 5.2), added for story S01-13. This is the package that
+         declares WorkflowBuilder, Executor<TIn,TOut>, ExecutorBinding, the edge model and
+         InProcessExecution - i.e. the graph itself - and Cbix.Core references it, which is the
+         first time Core takes a Microsoft.Agents.AI.* dependency at all.
+
+         Why that does not weaken LLM-agnosticism, by the same test PdfPig and PDFtoImage pass:
+         Microsoft.Agents.AI.Workflows names no model provider. Its whole vocabulary is graph
+         vocabulary - executors, edges, supersteps, checkpoints - plus AIAgent, which IS the
+         neutral currency design 3 says the solution speaks. It is the same dependency under every
+         provider profile, and the composition Core builds with it takes AIAgent instances as
+         input, so the HOST still decides which provider supplies them. The neutrality allowlist in
+         CoreAssemblyNeutralityTests gains the neutral MAF assemblies deliberately and with that
+         reasoning recorded there; Microsoft.Agents.AI.Anthropic and the Anthropic SDK stay banned
+         from every non-adapter assembly, enforced separately by ProviderContainmentTests.
+
+         Version, and why it is NOT prerelease: 1.17.0 is the stable line, matching the
+         Microsoft.Agents.AI / .Abstractions pins below exactly. Its net10.0 dependency group
+         requires Microsoft.Agents.AI 1.17.0 and Microsoft.Agents.AI.Abstractions 1.17.0 (measured
+         against the published nuspec, 2026-08-17), so the three move as a set - bump one and the
+         locked restore fails until the others follow, which is the intended behaviour.
+
+         Bracket notation for the same reason the pins below carry it: design 11 requires exact
+         pinned versions for MAF, and a bare version in NuGet is a MINIMUM.
+
+         TRANSITIVE CLOSURE, stated rather than glossed because it is the largest this file adds and
+         it lands in Core. Read from the REGENERATED LOCK FILE rather than from the nuspec's declared
+         dependency group - an earlier version of this comment was written from the nuspec and was
+         wrong by five packages, because a nuspec lists direct dependencies while the closure is what
+         resolution actually produces. The full set Cbix.Core's lock gained:
+
+           Microsoft.Agents.AI, Microsoft.Agents.AI.Abstractions, Microsoft.Agents.AI.Workflows
+           Microsoft.Extensions.AI, Microsoft.Extensions.AI.Evaluation
+           Microsoft.Extensions.Caching.Abstractions
+           Microsoft.Extensions.Compliance.Abstractions
+           Microsoft.Extensions.DependencyInjection.Abstractions
+           Microsoft.Extensions.FileSystemGlobbing
+           Microsoft.Extensions.ObjectPool
+           Microsoft.Extensions.Primitives
+           Microsoft.Extensions.VectorData.Abstractions
+           Microsoft.ML.Tokenizers
+           OpenTelemetry.Api
+           System.Numerics.Tensors
+           Google.Protobuf 3.30.2
+
+         Publishers, corrected: this is NOT "all Microsoft- or CNCF-published". Google.Protobuf is
+         published and author-signed by Google LLC, and it arrives through Microsoft.ML.Tokenizers
+         2.0.0 (which declares Google.Protobuf >= 3.30.2 for its SentencePiece model parsing).
+         Everything else in the list is Microsoft- or CNCF-published.
+
+         The Protobuf edge is worth naming rather than burying. CBIX uses no tokenizer and no
+         protobuf: they arrive because MAF's workflow package depends on the whole
+         Microsoft.Extensions.AI evaluation stack whether or not a consumer evaluates anything. So it
+         is unused code on the deployed image - which is not a vulnerability, but it IS attack surface
+         and audit surface nobody asked for, and a future advisory against Protobuf will hard-fail
+         CI's audit step over a package no CBIX line of code calls. Recorded so that when it happens
+         nobody spends an afternoon working out why we depend on Protobuf at all.
+
+         None of it is a model-provider SDK, which is the property that actually matters here, since
+         Core is the assembly every other project depends on.
+
+         Note what this does NOT mean: Cbix.Core emits a reference to only three of them
+         (Microsoft.Agents.AI.Workflows, Microsoft.Agents.AI.Abstractions and
+         Microsoft.Extensions.DependencyInjection.Abstractions - plus the ones it already had),
+         because a transitively-supplied assembly is compilable-against whether or not anything names
+         it. CoreAssemblyNeutralityTests asserts on the emitted reference table, so anything in this
+         closure that Core starts NAMING has to be added to that allowlist deliberately - which is
+         the control, rather than the package list. -->
+    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="[1.17.0]" />
   </ItemGroup>
 
   <ItemGroup Label="Provider adapter (Anthropic) - story S01-08">
@@ -163,6 +246,14 @@
       Note the version scheme: both core packages are STABLE at 1.17.0 while the Anthropic
       integration below is still prerelease. That maturity gap is exactly the design 11
       caution, and it is why the integration is quarantined in its own assembly.
+
+      Since S01-13 these two are no longer adapter-only. Cbix.Core references
+      Microsoft.Agents.AI.Abstractions as well, because the workflow graph and the relocated
+      document-bound callable name AIAgent, AgentRunOptions and AgentResponse - all declared
+      there (measured against the 1.17.0 XML documentation, not recalled). Core does NOT
+      reference Microsoft.Agents.AI: it names nothing from it, and the reference table asserted
+      in CoreAssemblyNeutralityTests is what keeps that true. This group's label is kept for the
+      history it carries; the packages themselves are neutral framework currency.
 
       Bracket notation is deliberate here and nowhere else in this file. A bare version in
       NuGet is a MINIMUM, not an exact pin; the entries above accept that because they are

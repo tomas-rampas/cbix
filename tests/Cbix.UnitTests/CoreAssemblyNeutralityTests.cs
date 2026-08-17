@@ -93,6 +93,43 @@ public sealed class CoreAssemblyNeutralityTests
         // network call.
         "SkiaSharp",
 
+        // Added deliberately for story S01-13, and this is the largest single act of judgement this
+        // list has recorded: Cbix.Core takes a dependency on Microsoft's Agent Framework itself.
+        //
+        // Why it is not the loophole it looks like. The rule this list enforces is that a PROVIDER
+        // SDK may never appear here, and these are not provider SDKs - they are the framework every
+        // provider is spoken to through. Microsoft.Agents.AI.Workflows declares WorkflowBuilder, the
+        // executor model and the edge types: graph vocabulary, naming no vendor.
+        // Microsoft.Agents.AI.Abstractions declares AIAgent, AgentRunOptions and AgentResponse - the
+        // neutral currency design 3 says the whole solution speaks, and the same currency the
+        // Anthropic adapter must widen its concrete agent to before anything else may see it. The
+        // graph Core builds with them takes AIAgent instances as INPUT (keyed registrations the host
+        // fills), so which provider supplies them remains a host decision.
+        //
+        // Why Core had to take it, rather than the host. CLAUDE.md places workflow-graph composition
+        // in Core precisely so the graph the tests run is the graph production runs - S01-09's
+        // agnosticism proof has to execute this topology against a stub IChatClient, and a graph
+        // assembled inside the worker executable could only be reached by starting the worker.
+        //
+        // What is still banned, and by what. Microsoft.Agents.AI.Anthropic and the Anthropic SDK are
+        // absent from this list, so this test refuses them for Core; ProviderContainmentTests refuses
+        // them for EVERY non-adapter assembly, including the host. Neither of those loosened.
+        //
+        // Two entries, not three: Cbix.Core emits no reference to Microsoft.Agents.AI itself, because
+        // it names nothing declared there (ChatClientAgent and ChatClientAgentRunOptions are the
+        // adapter's business). Listing only what is actually referenced is what keeps this test
+        // meaningful - if Core ever starts naming a concrete agent type, this list is what will say so.
+        "Microsoft.Agents.AI.Abstractions",
+        "Microsoft.Agents.AI.Workflows",
+
+        // Added deliberately for story S01-13 alongside the two above, and required by the same
+        // decision: Core owns the workflow half of the composition root, and describing registrations
+        // means naming IServiceCollection, IServiceProvider and ServiceDescriptor. Abstractions only -
+        // no container implementation, no hosting, no configuration binding, all of which stay on the
+        // host's side of the split. It names no model provider and makes no network call, which is the
+        // same test PdfPig, PDFtoImage and SkiaSharp pass.
+        "Microsoft.Extensions.DependencyInjection.Abstractions",
+
         "netstandard",
         "mscorlib",
     ];
@@ -153,6 +190,69 @@ public sealed class CoreAssemblyNeutralityTests
         Assert.Contains(
             core.GetReferencedAssemblies(),
             reference => string.Equals(reference.Name, "Microsoft.Extensions.AI.Abstractions", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CoreAssembly_ReferencesTheWorkflowEngine()
+    {
+        // Non-vacuity guard for the three entries story S01-13 added. If Core stopped referencing the
+        // workflow engine - the graph moved back into the host, the composition root was inlined
+        // somewhere - the allowlist would still contain the entries and the assertion above would
+        // still pass, while the property those entries were justified by (the graph the tests run is
+        // the graph production runs) had quietly stopped holding.
+        Assembly core = typeof(IDocumentContentProvider).Assembly;
+
+        Assert.Contains(
+            core.GetReferencedAssemblies(),
+            reference => string.Equals(reference.Name, "Microsoft.Agents.AI.Workflows", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AllowedReferences_NamesNoProviderSdk()
+    {
+        // The list's own rule, made checkable. Every entry above carries a justification in prose,
+        // which is exactly the kind of control that decays: the next addition is made under time
+        // pressure, the comment is copied, and nobody re-reads the paragraph at the top. This asserts
+        // the one thing the prose must never be argued into permitting.
+        //
+        // Ordinal-contains rather than equality, deliberately. It has to catch a plausible future
+        // entry as well as today's names - "Microsoft.Agents.AI.OpenAI", "Amazon.BedrockRuntime",
+        // "Anthropic.Beta" - so the check is on the vendor token, not on the exact assembly identity.
+        // The list names today's plausible providers, not an exhaustive taxonomy. "Groq" and "Claude"
+        // are on it for a specific reason: CLAUDE.md names Groq (via the OpenAI-compatible
+        // integration) as the likely second provider, and "Claude" is the product name a package might
+        // use where "Anthropic" is the vendor name - so a hypothetical Microsoft.Agents.AI.Claude
+        // would slip a vendor-name-only list.
+        string[] providerTokens =
+        [
+            "Anthropic",
+            "Claude",
+            "OpenAI",
+            "Groq",
+            "Bedrock",
+            "Gemini",
+            "Google",
+            "VertexAI",
+            "Ollama",
+            "Mistral",
+            "Cohere",
+            "Llama",
+        ];
+
+        List<string> offenders =
+        [
+            .. from allowed in AllowedReferences
+               from token in providerTokens
+               where allowed.Contains(token, StringComparison.OrdinalIgnoreCase)
+               select $"{allowed} (matched '{token}')",
+        ];
+
+        Assert.True(
+            offenders.Count == 0,
+            $"The neutral allowlist names a provider SDK: {string.Join(", ", offenders)}. Core is the "
+                + "assembly every other project depends on; a provider package here would make the "
+                + "LLM-agnosticism constraint unenforceable everywhere at once. Provider types belong in a "
+                + "Cbix.Providers.* adapter.");
     }
 
     private static bool IsAllowed(string assemblyName)

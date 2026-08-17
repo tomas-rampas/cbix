@@ -323,7 +323,7 @@ Done means:
 
 ---
 
-### [ ] S01-13 — Minimal `WorkflowBuilder` topology: ingest → triage → one agent
+### [x] S01-13 — Minimal `WorkflowBuilder` topology: ingest → triage → one agent
 
 As a developer
 I want a minimal MAF `WorkflowBuilder` graph connecting ingest, triage and a single downstream agent

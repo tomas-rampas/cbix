@@ -1,8 +1,15 @@
 using System.Globalization;
 
+using Cbix.Core.Diagnostics;
+using Cbix.Core.Documents;
+using Cbix.Core.Hosting;
+using Cbix.Core.Ingest;
 using Cbix.Core.Secrets;
+using Cbix.Core.Workflows;
 
 using Cbix.Providers.Anthropic;
+
+using Microsoft.Agents.AI;
 
 namespace Cbix.Worker;
 
@@ -24,12 +31,35 @@ namespace Cbix.Worker;
 /// <c>Microsoft.Extensions.Configuration.Abstractions</c> into Core's neutral reference set.
 /// </para>
 /// <para>
-/// <b>Scope, and what S01-13 does with it.</b> This is the whole composition today because there is
-/// nothing else to compose. When S01-13 builds the workflow graph, the neutral half of that graph
-/// moves into <c>Cbix.Core</c> and this method shrinks to what only a host can decide: pick the
-/// provider, resolve its credential, hand the resulting <c>AIAgent</c> source to Core's composition.
-/// The extension keeps its name and <c>Program.cs</c> keeps its three lines.
+/// <b>Scope, as S01-13 settled it.</b> The graph itself is composed by
+/// <see cref="CbixCoreServiceCollectionExtensions.AddCbixWorkflow"/> in <c>Cbix.Core</c>, so tests -
+/// including S01-09's stub-client agnosticism run - exercise the real composition without this
+/// executable. What is left here is exactly what only a host can decide, and each item is here for
+/// a reason that would not survive being moved:
 /// </para>
+/// <list type="bullet">
+///   <item><description>
+///   <b>Which provider.</b> Registering it means naming <see cref="AnthropicAgentFactory"/>, which
+///   Core may not do.
+///   </description></item>
+///   <item><description>
+///   <b>Its credential.</b> Resolved and validated eagerly, below.
+///   </description></item>
+///   <item><description>
+///   <b>The agents themselves.</b> Constructing one means choosing a model tier and a snapshot -
+///   provider facts. Core asks for them by role, as keyed <see cref="AIAgent"/> registrations.
+///   </description></item>
+///   <item><description>
+///   <b>The native-document profile source.</b> Only an adapter holding the provider client can
+///   build that profile; Core contributes the two that need no provider.
+///   </description></item>
+///   <item><description>
+///   <b>Configuration binding.</b> The ingest root, the size cap and the provider's presentation
+///   capability are read here, because binding them in Core would drag
+///   <c>Microsoft.Extensions.Configuration.Abstractions</c> into its neutral reference set for a
+///   handful of scalars.
+///   </description></item>
+/// </list>
 /// <para>
 /// <b>Everything credential-related happens eagerly, here.</b> Resolution, validation and the
 /// ambient-environment guard all run while services are being registered - before
@@ -57,6 +87,28 @@ public static class CbixWorkerHostExtensions
     /// </remarks>
     public const string AnthropicApiKeySecretName = AnthropicProviderOptions.SectionName + ":ApiKey";
 
+    /// <summary>Configuration section carrying the ingest gate's settings.</summary>
+    public const string IngestSectionName = "Cbix:Ingest";
+
+    /// <summary>
+    /// Configuration key naming what the configured provider can be shown a document as.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Provider-neutral by name and by section, deliberately. It states a capability
+    /// (<c>NativeDocument</c>, <c>Vision</c>, <c>TextOnly</c>), never a profile class, so an operator
+    /// behind an egress proxy that blocks the Files API sets a capability and the composed graph picks
+    /// a different profile with no code change - which is design 5.1's "only the strategy
+    /// implementations know which profile is in play", made operable.
+    /// </para>
+    /// <para>
+    /// It is <em>not</em> under the Anthropic section: the value describes the deployment's provider,
+    /// whichever that is, and burying it under one vendor's key would make swapping vendor a
+    /// configuration rewrite rather than a configuration change.
+    /// </para>
+    /// </remarks>
+    public const string DocumentPresentationKey = "Cbix:Provider:DocumentPresentation";
+
     /// <summary>
     /// Registers the worker's services: the clock, the secret resolver, the Anthropic agent factory
     /// and the background service.
@@ -72,8 +124,15 @@ public static class CbixWorkerHostExtensions
     /// or an unrecognised provider type - supplied the API key.
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// A provider setting is absent or out of range, or a conflicting ambient credential
-    /// (<c>ANTHROPIC_AUTH_TOKEN</c>) is present.
+    /// A provider setting is absent or out of range, a conflicting ambient credential
+    /// (<c>ANTHROPIC_AUTH_TOKEN</c>) is present, or a configured value cannot be parsed - a
+    /// non-integer output-token cap or maximum document size, or a document-presentation capability
+    /// that is not one of the known ones.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The configured ingest root is unusable: a UNC or device-namespace path, or one that cannot be
+    /// made fully qualified. Raised at composition, which is the point - an ingest root that can
+    /// never contain anything is a deployment mistake, not a per-document failure.
     /// </exception>
     public static IHostApplicationBuilder AddCbixWorker(this IHostApplicationBuilder builder)
     {
@@ -104,13 +163,83 @@ public static class CbixWorkerHostExtensions
             return factory;
         });
 
+        // The provider's own contribution to document presentation. Registered before Core's
+        // composition so the two local profiles it adds join this one in the selector's index; the
+        // selector picks among all three from the configured capability alone.
+        builder.Services.AddSingleton<IDocumentContentProfileSource, ClaudeDocumentContentProfileSource>();
+
+        // The agents Core's graph asks for by role. Keyed rather than named-by-type because the graph
+        // will hold nine of them by Sprint 02 and they are all AIAgent; the key IS the role.
+        //
+        // Singleton, not scoped. An agent is a stateless caller over the factory's pooled client - the
+        // per-run state lives in the document-content provider, which is scoped - so a per-run agent
+        // would allocate for nothing. Resolved lazily inside the lambda so that composing a host
+        // without ever running the workflow (which every credential test does) makes no agent at all.
+        builder.Services.AddKeyedSingleton<AIAgent>(
+            CbixWorkflowNodes.Triage,
+            (serviceProvider, _) => serviceProvider.GetRequiredService<AnthropicAgentFactory>().CreateAgent(
+                name: CbixWorkflowNodes.Triage,
+                instructions: TriageInstructions));
+
+        // Core's half: the ingest stack, the local document-content profiles and the workflow graph.
+        // Everything above is what this call cannot decide for itself.
+        builder.Services.AddCbixWorkflow(
+            ReadIngestOptions(builder.Configuration, builder.Environment.ContentRootPath),
+            ReadDocumentPresentationOptions(builder.Configuration));
+
+        // Scope validation, in PRODUCTION and not only in tests. Measured: with the default provider
+        // options a scoped service resolved from the root container is silently promoted to a
+        // root-lifetime singleton - no error, no log. For CBIX that promotion is the exact hazard the
+        // run-scoped document-content profile exists to prevent: the "prepare each document once" memo
+        // would become process-wide, holding every run's uploaded file ids and rendered page images for
+        // as long as the worker lives, and one run's prepared document would be handed to the next.
+        // The tests build their containers with ValidateScopes on and would never see it; only the
+        // deployed host would, as unbounded memory growth and cross-run contamination.
+        //
+        // ValidateOnBuild moves an unresolvable registration from "throws inside the first superstep of
+        // a real run" to "the host does not start", which is the same argument the credential
+        // resolution above already makes.
+        builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true,
+        }));
+
         builder.Services.AddHostedService(serviceProvider =>
         {
+            // Everything in this lambda runs when the host resolves its hosted services - i.e. at
+            // start, before any document is processed. That timing is the whole point: each of these
+            // would otherwise surface mid-batch, on a document that has already paid for work.
+
             // Resolving the factory here is deliberate, not incidental. It constructs the provider
             // client - and so emits the endpoint event - during host start, rather than whenever
             // something first happens to need an agent. An endpoint recorded after work has begun
             // is not a startup record.
             _ = serviceProvider.GetRequiredService<AnthropicAgentFactory>();
+
+            // Two distinct composition faults, and each needs its own probe because they are detected
+            // at different moments.
+            //
+            // Resolving the SELECTOR runs its constructor, which indexes the registered profile
+            // sources and refuses two claiming the same capability. That is a wiring conflict - a host
+            // registering a second native-document source, say - and until now it surfaced only when
+            // the first run asked for a provider.
+            DocumentContentProfileSelector selector =
+                serviceProvider.GetRequiredService<DocumentContentProfileSelector>();
+
+            EmitDocumentPresentationEvent(serviceProvider, selector);
+
+            // Resolving an actual PROVIDER runs the selector's lookup, which refuses a configured
+            // capability that no registered source implements. The constructor above cannot catch that:
+            // it indexes what exists without asking what was asked for.
+            //
+            // A throwaway scope, because the provider is run-scoped and resolving it from the root
+            // would be the very promotion ValidateScopes now forbids. Creating one costs an object and
+            // is safe: constructing a profile performs no I/O - no upload, no render, no network - so
+            // this probe cannot touch a document or spend anything. Disposed immediately, so the memo
+            // it would have held dies with it.
+            using IServiceScope probe = serviceProvider.CreateScope();
+            _ = probe.ServiceProvider.GetRequiredService<IDocumentContentProvider>();
 
             return ActivatorUtilities.CreateInstance<Worker>(serviceProvider);
         });
@@ -154,9 +283,54 @@ public static class CbixWorkerHostExtensions
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
+                new EventId(CbixEventIds.HostProviderEndpointResolved),
                 "Anthropic provider endpoint resolved to {AnthropicEndpoint}. All model calls in this run "
                     + "go to this host.",
                 factory.ResolvedEndpoint);
+        }
+    }
+
+    /// <summary>
+    /// Records, once at startup, how documents in this run will be presented to the model.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The symmetric half of <see cref="EmitEndpointEvent"/>, and it answers the other half of the
+    /// egress question.</b> That event says <em>where</em> the traffic goes; this says <em>what goes
+    /// in it</em>. The three capabilities send materially different things: the native-document
+    /// profile uploads the whole PDF to the provider's Files API and leaves it there, the
+    /// generic-vision profile sends locally rendered images of every page, and the text-only profile
+    /// sends the extracted text alone. A deployment reviewer looking at one startup line should be
+    /// able to say which of those a run did, without reading configuration on a machine they may not
+    /// have.
+    /// </para>
+    /// <para>
+    /// <b>It also makes the default's consequence visible.</b> An unconfigured deployment presents
+    /// documents natively, which means whole documents leave the estate. That is not a hidden
+    /// decision - it cannot happen without an Anthropic API key having been deliberately provisioned
+    /// through the secrets manager, and the worker refuses to start without one - but "not hidden"
+    /// and "recorded" are different things, and only the second survives an audit.
+    /// </para>
+    /// <para>
+    /// The capability is an enum this code chose from a closed set, so there is nothing to sanitise:
+    /// no operator-supplied string reaches this line.
+    /// </para>
+    /// </remarks>
+    private static void EmitDocumentPresentationEvent(
+        IServiceProvider serviceProvider,
+        DocumentContentProfileSelector selector)
+    {
+        ILogger<DocumentContentProfileSelector> logger =
+            serviceProvider.GetRequiredService<ILogger<DocumentContentProfileSelector>>();
+
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                new EventId(CbixEventIds.HostDocumentPresentationResolved),
+                "Documents in this run are presented to the model as {DocumentPresentation}. This decides "
+                    + "what leaves the estate: the whole document file, rendered page images, or extracted "
+                    + "text only.",
+                selector.ConfiguredCapability);
         }
     }
 
@@ -198,10 +372,152 @@ public static class CbixWorkerHostExtensions
         return options;
     }
 
+    /// <summary>
+    /// The triage agent's system instructions until story S01-14 supplies the real ones.
+    /// </summary>
+    /// <remarks>
+    /// It states the uniform extraction prompting rules (CLAUDE.md) and nothing else. S01-14 adds
+    /// triage's own contract - the <c>DocumentProfile</c> schema of design Appendix A, the layout
+    /// families, the routing threshold - and pins the model tier (Haiku, design 7). A placeholder that
+    /// broke the uniform rules would be the version somebody copied into the next agent.
+    /// </remarks>
+    private const string TriageInstructions =
+        "Extract, never interpret. Copy snippets verbatim. Return null for absent fields - never "
+            + "invent. Use only the supplied document. Report page numbers as they are shown in a PDF "
+            + "viewer.";
+
+    /// <summary>Reads the ingest gate's settings, defaulting the root under the content root.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The default root is deliberately a path, not an absence.</b> Making the key required would
+    /// make every host that never ingests anything - the credential tests, a diagnostic run - fail to
+    /// compose, which trades a real cost for a hypothetical one. The default is a directory under the
+    /// content root, so an unconfigured deployment reads from a location it owns rather than from
+    /// wherever the process happens to be running.
+    /// </para>
+    /// <para>
+    /// <b>The size cap defaults to the Claude Files API limit</b> rather than to something rounder:
+    /// the cap exists so a document that could never be uploaded is refused before it is read and
+    /// hashed, and a default above the provider's own ceiling would let exactly those through.
+    /// </para>
+    /// </remarks>
+    private static DocumentIngestOptions ReadIngestOptions(IConfiguration configuration, string contentRootPath)
+    {
+        IConfigurationSection section = configuration.GetSection(IngestSectionName);
+
+        string root = section["Root"] is { Length: > 0 } configured
+            ? configured
+            : Path.Combine(contentRootPath, "ingest");
+
+        long maxBytes = section["MaxDocumentBytes"] is { Length: > 0 } cap
+            ? ParseMaxDocumentBytes(cap)
+            : DocumentIngestOptions.ClaudeFilesApiLimitBytes;
+
+        return new DocumentIngestOptions(Path.GetFullPath(root), maxBytes);
+    }
+
+    /// <summary>Reads the configured provider's document-presentation capability.</summary>
+    /// <remarks>
+    /// Parsed strictly and case-insensitively: an unrecognised value is a refusal, not a fallback. A
+    /// typo silently resolving to the default would present documents differently from what was
+    /// configured and show up only as degraded matrix accuracy - the failure mode design 5.1 exists
+    /// to prevent, arriving by way of a spelling mistake.
+    /// </remarks>
+    private static DocumentPresentationOptions ReadDocumentPresentationOptions(IConfiguration configuration)
+    {
+        if (configuration[DocumentPresentationKey] is not { Length: > 0 } configured)
+        {
+            return new DocumentPresentationOptions();
+        }
+
+        // The name check comes FIRST, and it is not redundant with TryParse. Enum.TryParse accepts a
+        // DIGIT STRING for any integer, defined or not: "0" parses to NativeDocument and "2" to
+        // TextOnly, so a configuration value of "2" - a plausible typo, or a leftover from a numeric
+        // scheme - would silently select the degraded text-only presentation with no error. Worse,
+        // Enum.IsDefined then passes, because the value genuinely is defined. Requiring the configured
+        // string to be one of the NAMES makes the numeric back door unreachable, and every unrecognised
+        // value - digit or not - lands on the same refusal below.
+        bool namesACapability = Array.Exists(
+            Enum.GetNames<DocumentPresentationCapability>(),
+            name => string.Equals(name, configured, StringComparison.OrdinalIgnoreCase));
+
+        if (!namesACapability
+            || !Enum.TryParse(configured, ignoreCase: true, out DocumentPresentationCapability capability)
+            || !Enum.IsDefined(capability))
+        {
+            throw new InvalidOperationException(
+                $"Configuration key '{DocumentPresentationKey}' is '{ForMessage(configured)}', which is not "
+                    + $"a known document-presentation capability. Valid values: "
+                    + $"{string.Join(", ", Enum.GetNames<DocumentPresentationCapability>())}.");
+        }
+
+        return new DocumentPresentationOptions(capability);
+    }
+
+    /// <summary>
+    /// Renders an operator-supplied configuration value safely inside an exception message.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The same reasoning as <c>PathBoundary.ForLog</c>, applied to the other untrusted string
+    /// class this process handles.</b> A configuration value is not attacker-controlled in the way a
+    /// dropped file name is, but it is not written by the person who reads the failure either: it
+    /// arrives from an environment variable, a Helm chart or a mounted config map, and the exception
+    /// carrying it is what an operator reads in a terminal and what a log sink stores as a line.
+    /// Control characters, format characters (U+200E and friends) and line separators in that string
+    /// forge log lines and reorder rendered text.
+    /// </para>
+    /// <para>
+    /// <b>Duplicated here rather than exposed from Core.</b> <c>PathBoundary</c> is internal to
+    /// <c>Cbix.Core</c> and its <c>ForLog</c> carries a path-length truncation this has no use for.
+    /// Widening Core's public surface to share eight lines would trade a real API commitment for a
+    /// small saving; the two are kept in step by the comment on each rather than by a shared type.
+    /// The category list is the same one <c>PathBoundary.IsUnsafeToRender</c> uses.
+    /// </para>
+    /// </remarks>
+    private static string ForMessage(string configured)
+    {
+        // Bounded before rendering: a multi-megabyte environment variable in an exception message is a
+        // denial of service against whoever has to read it.
+        const int MaxRenderedLength = 200;
+        const string TruncationMarker = "...[truncated]";
+
+        ReadOnlySpan<char> kept = configured.Length <= MaxRenderedLength
+            ? configured
+            : configured.AsSpan(0, MaxRenderedLength);
+
+        string sanitised = string.Create(kept.Length, configured, static (destination, original) =>
+        {
+            for (int index = 0; index < destination.Length; index++)
+            {
+                char character = original[index];
+
+                destination[index] = char.IsControl(character)
+                    || char.GetUnicodeCategory(character)
+                        is UnicodeCategory.Format
+                        or UnicodeCategory.Surrogate
+                        or UnicodeCategory.LineSeparator
+                        or UnicodeCategory.ParagraphSeparator
+                    ? '�'
+                    : character;
+            }
+        });
+
+        // Appended after sanitisation, so nothing in the input can forge the marker.
+        return configured.Length <= MaxRenderedLength ? sanitised : sanitised + TruncationMarker;
+    }
+
+    private static long ParseMaxDocumentBytes(string configured) =>
+        long.TryParse(configured, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed)
+            ? parsed
+            : throw new InvalidOperationException(
+                $"Configuration key '{IngestSectionName}:MaxDocumentBytes' is '{ForMessage(configured)}', which is "
+                    + "not an integer.");
+
     private static int ParseMaxOutputTokens(string configured) =>
         int.TryParse(configured, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
             ? parsed
             : throw new InvalidOperationException(
                 $"Configuration key '{AnthropicProviderOptions.SectionName}:MaxOutputTokens' is "
-                    + $"'{configured}', which is not an integer.");
+                    + $"'{ForMessage(configured)}', which is not an integer.");
 }

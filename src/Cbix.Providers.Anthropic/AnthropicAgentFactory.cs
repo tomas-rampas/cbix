@@ -1,3 +1,4 @@
+using Cbix.Core.Agents;
 using Cbix.Core.Documents;
 
 using global::Anthropic;
@@ -241,8 +242,10 @@ public sealed class AnthropicAgentFactory : IDisposable
     /// </param>
     /// <param name="maxOutputTokens">Per-response output cap, or <see langword="null"/> for the configured default.</param>
     /// <returns>
-    /// A binding whose <see cref="BoundDocumentAgent.RunAsync"/> is the only way to reach the model
-    /// with this document attached.
+    /// Core's neutral binding, whose <see cref="BoundDocumentAgent.RunAsync"/> is the only way to
+    /// reach the model with this document attached. The declared type belongs to
+    /// <c>Cbix.Core</c> rather than to this assembly (story S01-13), so an executor can hold a
+    /// document-bound agent without referencing a provider at all.
     /// </returns>
     /// <remarks>
     /// <para>
@@ -308,9 +311,17 @@ public sealed class AnthropicAgentFactory : IDisposable
             name: name,
             defaultMaxTokens: tokens);
 
-        // One resolved model and one resolved cap reach both halves. The binding rebuilds the request
-        // from these on every call, so there is no options object anyone can mis-pair or mutate.
-        return new BoundDocumentAgent(agent, blocks, model, tokens);
+        // One resolved model and one resolved cap reach both halves, captured in the closure below.
+        // The binding invokes it on every call, so there is no options object anyone can mis-pair or
+        // mutate - and the Claude-specific half of the request (the raw-representation factory, the
+        // beta opt-ins, the document blocks) never leaves this assembly, which is what lets the
+        // binding itself be a neutral Core type.
+        return new BoundDocumentAgent(
+            agent,
+            () => new ChatClientAgentRunOptions(new ChatOptions
+            {
+                RawRepresentationFactory = _ => ClaudeDocumentAttachment.BuildRequest(blocks, model, tokens),
+            }));
     }
 
     /// <summary>Resolves and validates the model for one agent.</summary>

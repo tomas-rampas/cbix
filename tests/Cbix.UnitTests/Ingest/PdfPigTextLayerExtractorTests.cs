@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 
+using Cbix.Core.Diagnostics;
 using Cbix.Core.Documents;
 using Cbix.Core.Ingest;
 
@@ -29,10 +30,17 @@ public sealed class PdfPigTextLayerExtractorTests : IDisposable
     /// rule. They are the log's stable contract - message text is prose and may be reworded, but an
     /// id is what a SIEM keys on, so it is the part that must not drift silently.
     /// </summary>
-    private const int TextLayerRefusedEventId = 1013;
+    /// <remarks>
+    /// Taken from <see cref="CbixEventIds"/> rather than restated as literals. Restating them is what
+    /// let the open-failure event and <c>DocumentIngestService</c>'s Critical credential failure both
+    /// sit on 1015: the literal here agreed with the literal there, and neither knew about the other.
+    /// The open-failure id is now 1019; this test is what proves the renumbering actually landed on
+    /// the emitted event and not only in the registry.
+    /// </remarks>
+    private const int TextLayerRefusedEventId = CbixEventIds.IngestTextLayerRefused;
 
     /// <inheritdoc cref="TextLayerRefusedEventId" />
-    private const int TextLayerOpenFailedEventId = 1015;
+    private const int TextLayerOpenFailedEventId = CbixEventIds.IngestTextLayerOpenFailed;
 
     private const string DeSpecimenFileName = "Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf";
     private const string ChSpecimenFileName = "Cross_Border_Trading_Legal_Instruction_CH_SPECIMEN.pdf";

@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Runtime.Versioning;
 
+using Cbix.Core.Diagnostics;
 using Cbix.Core.Ingest;
 
 using Microsoft.Extensions.Logging;
@@ -483,7 +484,7 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
     }
 
     [LoggerMessage(
-        EventId = 1017,
+        EventId = CbixEventIds.PageRenderRefused,
         Level = LogLevel.Warning,
         Message = "Page rasterisation refused a document: {Reason} - {Detail}. Document='{DocumentPath}', failure={FailureType}.")]
     private static partial void LogRenderRefused(
@@ -499,7 +500,7 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
     /// the dependency audit cannot see. It is the line an operator should have an alert on.
     /// </summary>
     [LoggerMessage(
-        EventId = 1018,
+        EventId = CbixEventIds.PageRenderFaulted,
         Level = LogLevel.Error,
         Message = "Page rasteriser faulted: {Detail}. Document='{DocumentPath}', failure={FailureType}.")]
     private static partial void LogRenderFaulted(

@@ -11,6 +11,26 @@
     <!-- Provider-neutral AI abstractions only. Adding a provider package here would
          break the LLM-agnosticism constraint at its root; see /Directory.Packages.props. -->
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <!-- Story S01-13. The workflow graph itself (design 5.2): WorkflowBuilder, Executor<TIn,TOut>,
+         ExecutorBinding, the edge model, InProcessExecution. CLAUDE.md places workflow-graph
+         composition in Core precisely so the tests - and S01-09's stub-client agnosticism run -
+         exercise the real composition without launching the executable, which is only possible if
+         Core is the assembly that owns the graph.
+
+         Neutral by the test the allowlist applies: it names no model provider, and the graph it
+         builds takes AIAgent instances as INPUT. Which provider produces them stays a host
+         decision. See /Directory.Packages.props for the full justification. -->
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" />
+    <!-- Named directly rather than left to arrive through the Workflows package, by the rule the
+         CPM file states: a type in our own API surface should not arrive by accident. Core's public
+         surface names AIAgent (the triage executor's agent slot, the document-bound callable),
+         AgentRunOptions and AgentResponse - all declared here, none in Microsoft.Agents.AI. -->
+    <PackageReference Include="Microsoft.Agents.AI.Abstractions" />
+    <!-- Story S01-13. IServiceCollection / IServiceProvider for Core's half of the composition root.
+         Abstractions only - no container implementation, no hosting, no configuration: Core
+         describes the graph's registrations, the host builds and owns the container. Arrives
+         transitively through the Workflows package regardless; declared because Core names it. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <!-- Logging abstractions, not a logging implementation: Core emits structured security events
          (ingest refusals) and leaves every sink choice to the host. -->
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
@@ -28,5 +48,21 @@
          the version stays pinned in lockstep with PDFtoImage's native assets. -->
     <PackageReference Include="SkiaSharp" />
   </ItemGroup>
+
+  <!-- NO InternalsVisibleTo, deliberately, and this note exists so nobody adds one back casually.
+
+       Story S01-13 briefly carried one, to let the wire-level tests reach
+       BoundDocumentAgent.CreateRunOptions. That was the wrong trade twice over. First, the grant is
+       not narrow: `InternalsVisibleTo` is per-ASSEMBLY, so it exposed every internal in Cbix.Core -
+       PathBoundary's containment primitives, FileLinkCount's handle reader, the SecretSource types -
+       to buy access to one accessor. Second, it bought nothing: the property those tests care about
+       is that each call carries its own options and no holder can spoil the next one, and that is
+       observable through the public RunAsync against a recording chat client, which is the path
+       production takes anyway. Asserting through the public surface made the tests better AND removed
+       the grant, so CreateRunOptions is now private.
+
+       If a future test seems to need this, the question to ask first is whether the behaviour it is
+       reaching for is observable from outside. It usually is, and the test is usually better for
+       it. -->
 
 </Project>

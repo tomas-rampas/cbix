@@ -1,3 +1,4 @@
+using Cbix.Core.Agents;
 using Cbix.Core.Documents;
 
 using global::Anthropic.Models.Beta;

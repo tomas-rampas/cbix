@@ -1,5 +1,6 @@
 using System.Text;
 
+using Cbix.Core.Diagnostics;
 using Cbix.Core.Documents;
 using Cbix.Core.Ingest;
 using Cbix.Providers.Anthropic;
@@ -184,9 +185,9 @@ public sealed class DocumentIngestContentPreparationTests : IDisposable
         await Assert.ThrowsAsync<DocumentPreparationException>(
             () => service.IngestAsync(WriteDocument("DE_SPECIMEN.pdf")));
 
-        LoggedEvent credential = Assert.Single(logger.Entries, entry => entry.EventId == 1015);
+        LoggedEvent credential = Assert.Single(logger.Entries, entry => entry.EventId == CbixEventIds.IngestPreparationCredentialFailure);
         Assert.Equal(LogLevel.Critical, credential.Level);
-        Assert.DoesNotContain(logger.Entries, entry => entry.EventId == 1016);
+        Assert.DoesNotContain(logger.Entries, entry => entry.EventId == CbixEventIds.IngestPreparationFailed);
     }
 
     [Fact]
@@ -201,9 +202,9 @@ public sealed class DocumentIngestContentPreparationTests : IDisposable
         await Assert.ThrowsAsync<DocumentPreparationException>(
             () => service.IngestAsync(WriteDocument("DE_SPECIMEN.pdf")));
 
-        LoggedEvent failure = Assert.Single(logger.Entries, entry => entry.EventId == 1016);
+        LoggedEvent failure = Assert.Single(logger.Entries, entry => entry.EventId == CbixEventIds.IngestPreparationFailed);
         Assert.Equal(LogLevel.Error, failure.Level);
-        Assert.DoesNotContain(logger.Entries, entry => entry.EventId == 1015);
+        Assert.DoesNotContain(logger.Entries, entry => entry.EventId == CbixEventIds.IngestPreparationCredentialFailure);
     }
 
     [Fact]

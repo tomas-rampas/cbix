@@ -1,3 +1,4 @@
+using Cbix.Core.Diagnostics;
 using Cbix.Core.Documents;
 
 using Microsoft.Extensions.Logging;
@@ -395,7 +396,7 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
     /// structure and is the one string here that nothing has sanitised.
     /// </remarks>
     [LoggerMessage(
-        EventId = 1013,
+        EventId = CbixEventIds.IngestTextLayerRefused,
         Level = LogLevel.Error,
         Message = "Ingest could not extract a text layer: {Reason} - {Detail}. Document='{DocumentPath}', failure={FailureType}.")]
     private static partial void LogTextLayerRefused(
@@ -407,13 +408,22 @@ public sealed partial class PdfPigTextLayerExtractor : ITextLayerExtractor
 
     /// <summary>Structured event for a document that could not be opened for extraction.</summary>
     /// <remarks>
+    /// <para>
     /// Its own event id rather than a reuse of <see cref="LogTextLayerRefused"/>'s: this is not a
     /// refusal this code decided and carries no <see cref="DocumentNotIngestibleReason"/>, so folding
     /// the two onto one id would leave an alert rule unable to tell "the supplier's document is bad"
     /// from "our share is gone".
+    /// </para>
+    /// <para>
+    /// <b>Renumbered 1015 -> 1019.</b> This event was written as the literal <c>1015</c> and so was
+    /// <see cref="DocumentIngestService"/>'s Critical credential-failure event - a real collision that
+    /// compiled, ran, and would have buried a fleet-wide outage under per-document noise on any
+    /// dashboard keyed on the id. Ids now come from <see cref="CbixEventIds"/> and
+    /// <c>CbixEventIdTests</c> fails the build on a duplicate; see that class for the whole account.
+    /// </para>
     /// </remarks>
     [LoggerMessage(
-        EventId = 1015,
+        EventId = CbixEventIds.IngestTextLayerOpenFailed,
         Level = LogLevel.Error,
         Message = "Ingest could not open a document for text layer extraction. Document='{DocumentPath}', failure={FailureType}.")]
     private static partial void LogTextLayerOpenFailed(ILogger logger, string documentPath, string failureType);

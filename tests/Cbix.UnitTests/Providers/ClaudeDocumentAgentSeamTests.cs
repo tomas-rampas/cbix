@@ -1,9 +1,11 @@
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 
 using Anthropic.Models.Beta.Messages;
 
+using Cbix.Core.Agents;
 using Cbix.Core.Documents;
 using Cbix.Core.Ingest;
 using Cbix.Providers.Anthropic;
@@ -214,11 +216,45 @@ public sealed class ClaudeDocumentAgentSeamTests : IDisposable
     }
 
     [Fact]
-    public async Task DocumentAgent_BuildsFreshRunOptionsForEveryCall()
+    public async Task DocumentAgent_ExposesNoWayToObtainTheRunOptions()
     {
-        // The forgery fix, asserted at its root: nothing outside the binding ever holds the options,
-        // and each call gets its own instance. A shared ChatOptions is mutable - any holder could
-        // null RawRepresentationFactory and silently stop sending the document from then on.
+        // The forgery guarantee, asserted the strongest way available: there is no member on the
+        // binding that hands anyone the options at all.
+        //
+        // This replaces a test that reached CreateRunOptions through an InternalsVisibleTo grant and
+        // sabotaged one instance to prove the next call was unaffected. That test asserted something
+        // weaker than what is true - "a holder cannot spoil the next call" - while requiring Core to
+        // expose every one of its internals to the test assembly. The property is better stated as
+        // "nobody can become a holder", and stating it that way costs no grant.
+        //
+        // Reflection over every member kind, because the leak this guards against would be a
+        // convenience accessor added later by someone who found the private method inconvenient.
+        const BindingFlags Surface =
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
+            | BindingFlags.DeclaredOnly;
+
+        List<string> exposed =
+        [
+            .. typeof(BoundDocumentAgent).GetMethods(Surface)
+                .Where(method => !method.IsPrivate && typeof(AgentRunOptions).IsAssignableFrom(method.ReturnType))
+                .Select(method => $"method {method.Name}"),
+            .. typeof(BoundDocumentAgent).GetProperties(Surface)
+                .Where(property => typeof(AgentRunOptions).IsAssignableFrom(property.PropertyType))
+                .Select(property => $"property {property.Name}"),
+            .. typeof(BoundDocumentAgent).GetFields(Surface)
+                .Where(field => !field.IsPrivate && typeof(AgentRunOptions).IsAssignableFrom(field.FieldType))
+                .Select(field => $"field {field.Name}"),
+        ];
+
+        Assert.True(
+            exposed.Count == 0,
+            $"BoundDocumentAgent hands out its run options through: {string.Join(", ", exposed)}. The options "
+                + "carry the document attachment, and a holder that nulled the raw-representation factory "
+                + "would silently stop sending the document from then on.");
+
+        // And the behaviour that matters, through the public path: two calls, two documents on the
+        // wire. This is what the sabotage test was really proving, and it proves it against the same
+        // route production uses rather than against an accessor only a test can reach.
         using Seam seam = await Seam.CreateAsync(this);
 
         BoundDocumentAgent bound = seam.Factory.CreateDocumentAgent(
@@ -226,18 +262,10 @@ public sealed class ClaudeDocumentAgentSeamTests : IDisposable
             "Extract, never interpret.",
             seam.Document);
 
-        ChatClientAgentRunOptions first = bound.CreateRunOptions();
-        ChatClientAgentRunOptions second = bound.CreateRunOptions();
+        await RunAsync(bound, "First question.");
+        Assert.Equal(seam.FileId, FindDocumentBlock(seam.Body()).GetProperty("source").GetProperty("file_id").GetString());
 
-        Assert.NotSame(first, second);
-        Assert.NotSame(first.ChatOptions, second.ChatOptions);
-
-        // Sabotage the first set the way a careless holder would, then prove a real call is
-        // unaffected - because it never sees that instance.
-        first.ChatOptions!.RawRepresentationFactory = null;
-
-        await RunAsync(bound);
-
+        await RunAsync(bound, "Second question.");
         Assert.Equal(seam.FileId, FindDocumentBlock(seam.Body()).GetProperty("source").GetProperty("file_id").GetString());
     }
 

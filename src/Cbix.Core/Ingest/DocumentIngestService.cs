@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Security.Cryptography;
 
+using Cbix.Core.Diagnostics;
 using Cbix.Core.Documents;
 
 using Microsoft.Extensions.Logging;
@@ -766,7 +767,7 @@ public sealed partial class DocumentIngestService
     /// </para>
     /// </remarks>
     [LoggerMessage(
-        EventId = 1010,
+        EventId = CbixEventIds.IngestContainmentRefusal,
         Level = LogLevel.Error,
         Message = "Ingest refused a submission at the containment boundary: {Reason}. Submitted='{SubmittedPath}', resolved='{ResolvedPath}', root='{IngestRoot}'.")]
     private static partial void LogContainmentRefusal(
@@ -820,14 +821,24 @@ public sealed partial class DocumentIngestService
     /// Structured event for a preparation failure caused by the credential rather than the document.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Its own event id, and that is the entire point of the split: this failure will repeat for
     /// every document in the estate until a key is rotated, so it is the one an alert rule should
     /// fire on. Folding it in with document-specific failures would bury a fleet-wide outage under
     /// per-document noise. Critical rather than Error for the same reason - nothing else will
     /// succeed either.
+    /// </para>
+    /// <para>
+    /// <b>That argument was true and silently untrue at the same time.</b> The id was written as the
+    /// literal <c>1015</c> here and, independently, at
+    /// <c>PdfPigTextLayerExtractor.LogTextLayerOpenFailed</c> - so the very burial this comment
+    /// warned about was already happening for anyone keyed on the id. Ids now come from
+    /// <see cref="CbixEventIds"/> and <c>CbixEventIdTests</c> fails on a duplicate; the extractor's
+    /// moved to 1019 and this one kept 1015.
+    /// </para>
     /// </remarks>
     [LoggerMessage(
-        EventId = 1015,
+        EventId = CbixEventIds.IngestPreparationCredentialFailure,
         Level = LogLevel.Critical,
         Message = "Document preparation was refused by the provider's credential, so every document will fail "
             + "until it is repaired. Document='{DocumentName}', transient={IsTransient}.")]
@@ -840,7 +851,7 @@ public sealed partial class DocumentIngestService
     /// exception's own message reaches the caller, and it is the caller that decides what to persist.
     /// </remarks>
     [LoggerMessage(
-        EventId = 1016,
+        EventId = CbixEventIds.IngestPreparationFailed,
         Level = LogLevel.Error,
         Message = "Document preparation failed. Document='{DocumentName}', kind={FailureKind}, transient={IsTransient}.")]
     private static partial void LogPreparationFailed(
@@ -852,7 +863,7 @@ public sealed partial class DocumentIngestService
     /// <summary>Structured event for a submission inside the root that is not a usable document.</summary>
     /// <remarks>See <see cref="LogContainmentRefusal"/> on why the sanitised paths are named in the template.</remarks>
     [LoggerMessage(
-        EventId = 1011,
+        EventId = CbixEventIds.IngestDocumentRefused,
         Level = LogLevel.Error,
         Message = "Ingest refused a submission as not a usable document: {Reason}. Document='{DocumentPath}', bytes read={ByteLength}.")]
     private static partial void LogDocumentRefused(
@@ -870,7 +881,7 @@ public sealed partial class DocumentIngestService
     /// <see cref="PathBoundary.ForLog"/>; the sanitised path is supplied separately.
     /// </remarks>
     [LoggerMessage(
-        EventId = 1012,
+        EventId = CbixEventIds.IngestDocumentReadFailed,
         Level = LogLevel.Error,
         Message = "Ingest could not read a submitted document. Document='{DocumentPath}', failure={FailureType}.")]
     private static partial void LogDocumentReadFailed(ILogger logger, string documentPath, string failureType);
@@ -888,7 +899,7 @@ public sealed partial class DocumentIngestService
     /// name refused for carrying U+202E is exactly the string that must not be rendered raw here.
     /// </remarks>
     [LoggerMessage(
-        EventId = 1014,
+        EventId = CbixEventIds.IngestUnacceptableReferenceShape,
         Level = LogLevel.Error,
         Message = "Ingest refused a submission whose reference shape is unacceptable. FileName='{FileName}', parameter={ParameterName}, failure={FailureType}.")]
     private static partial void LogUnacceptableReferenceShape(
