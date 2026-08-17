@@ -459,6 +459,15 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "cbix.agnosticism": {
+        "type": "Project",
+        "dependencies": {
+          "Cbix.Core": "[1.0.0, )",
+          "Microsoft.Agents.AI": "[1.17.0, 1.17.0]",
+          "Microsoft.Extensions.AI.Abstractions": "[10.9.0, )",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
+        }
+      },
       "cbix.core": {
         "type": "Project",
         "dependencies": {

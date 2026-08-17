@@ -21,7 +21,7 @@ namespace Cbix.Bdd.Steps;
 public sealed class IngestTextLayerExtractionSteps(IngestTextLayerExtractionState state)
 {
     /// <summary>The specimen named by the story's Gherkin, relative to the repository's data directory.</summary>
-    private const string SpecimenFileName = "Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf";
+    private const string SpecimenFileName = RepositoryLayout.DeSpecimenFileName;
 
     /// <summary>
     /// Pages the DE specimen has, measured from the file itself rather than assumed here.
@@ -139,33 +139,9 @@ public sealed class IngestTextLayerExtractionSteps(IngestTextLayerExtractionStat
         Assert.NotNull(RequireFirstResult().TextLayer);
     }
 
-    /// <summary>
-    /// Walks up from the test assembly's location to the directory holding <c>Cbix.sln</c>.
-    /// </summary>
-    /// <remarks>
-    /// The specimen is repository data read in place, not a build artefact copied to the output
-    /// directory: copying it would duplicate a binary fixture per test project and let the copies
-    /// drift from the golden set that describes them.
-    /// </remarks>
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cbix.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        Assert.True(
-            directory is not null,
-            $"No directory containing 'Cbix.sln' was found above '{AppContext.BaseDirectory}'.");
-
-        return directory!.FullName;
-    }
-
     private void ArrangeService()
     {
-        string ingestRoot = Path.Combine(FindRepositoryRoot(), "data");
+        string ingestRoot = RepositoryLayout.DataDirectory();
         string specimenPath = Path.Combine(ingestRoot, SpecimenFileName);
 
         Assert.True(File.Exists(specimenPath), $"The DE specimen is missing from the repository at '{specimenPath}'.");

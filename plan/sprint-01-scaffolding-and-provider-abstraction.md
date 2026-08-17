@@ -218,7 +218,7 @@ Done means:
 
 ---
 
-### [ ] S01-09 — LLM-agnosticism proof: workflow runs against a stub `IChatClient`
+### [x] S01-09 — LLM-agnosticism proof: workflow runs against a stub `IChatClient`
 
 As the architecture owner
 I want the full workflow skeleton to run against a stub `IChatClient` with zero Anthropic dependency on that path

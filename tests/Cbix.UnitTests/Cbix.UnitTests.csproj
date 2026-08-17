@@ -25,6 +25,12 @@
          that graph. -->
     <ProjectReference Include="..\..\src\Cbix.Providers.Anthropic\Cbix.Providers.Anthropic.csproj" />
     <ProjectReference Include="..\..\src\Cbix.Worker\Cbix.Worker.csproj" />
+    <!-- Story S01-09. The stub provider assembly the agnosticism run executes. Referenced for two
+         reasons, both deliberate: StubProviderAssemblyNeutralityTests asserts on its emitted
+         reference table directly, and the reference puts the assembly in this project's output where
+         CbixAssemblies discovers it - so the existing containment assertions cover it with no list to
+         maintain. -->
+    <ProjectReference Include="..\Cbix.Agnosticism\Cbix.Agnosticism.csproj" />
   </ItemGroup>
 
 </Project>

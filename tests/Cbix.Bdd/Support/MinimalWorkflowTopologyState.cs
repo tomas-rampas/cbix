@@ -1,3 +1,5 @@
+using Cbix.Agnosticism;
+
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -32,7 +34,7 @@ public sealed class MinimalWorkflowTopologyState : IDisposable
     public string? SpecimenPath { get; set; }
 
     /// <summary>Gets or sets the chat client behind the triage agent, which counts what it was asked.</summary>
-    public CountingChatClient? ChatClient { get; set; }
+    public StubChatClient? ChatClient { get; set; }
 
     /// <summary>
     /// Gets or sets how many model calls had been made before the submission under test.

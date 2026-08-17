@@ -16,6 +16,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The provider-free stub and the composition that puts it behind the triage agent
+         (story S01-09). It is a separate assembly on purpose: the run executes the stub, so the
+         stub's assembly is part of the dependency graph the agnosticism scenario walks, and this
+         project takes a PROJECT reference to the Anthropic adapter one line further down. That
+         reference emits no entry in this assembly's reference table today - the S01-08 bindings
+         resolve adapter types reflectively - so the separation is not a workaround for a leak that
+         exists, it is what keeps the stub's neutrality structural instead of contingent on how some
+         other scenario happens to be written. See the feature file's header and
+         Cbix.Agnosticism.csproj for the full reasoning. -->
+    <ProjectReference Include="..\Cbix.Agnosticism\Cbix.Agnosticism.csproj" />
     <ProjectReference Include="..\..\src\Cbix.Core\Cbix.Core.csproj" />
     <!-- Referenced so the S01-08 containment scenario can reflect over what the compiler
          actually emitted into the host's reference table. Worker is the composition host:

@@ -37,7 +37,7 @@ public sealed class ClaudeDocumentContentProfileSteps(ClaudeDocumentContentProfi
     private const string ProviderAssemblyName = "Cbix.Providers.Anthropic";
 
     /// <summary>The specimen named by the story's Gherkin, relative to the repository root.</summary>
-    private const string SpecimenFileName = "Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf";
+    private const string SpecimenFileName = RepositoryLayout.DeSpecimenFileName;
 
     /// <summary>
     /// A self-labelling fictional key for the canned scenarios. Construction and upload must both be
@@ -277,7 +277,7 @@ public sealed class ClaudeDocumentContentProfileSteps(ClaudeDocumentContentProfi
     /// <summary>Builds the profile over either the canned Files API or the real one.</summary>
     private async Task ArrangeAsync(string relativePath, bool live)
     {
-        string specimenPath = Path.Combine(FindRepositoryRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar));
+        string specimenPath = Path.Combine(RepositoryLayout.Root(), relativePath.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(specimenPath), $"The DE specimen is missing from the repository at '{specimenPath}'.");
 
         state.SpecimenPath = specimenPath;
@@ -402,23 +402,6 @@ public sealed class ClaudeDocumentContentProfileSteps(ClaudeDocumentContentProfi
                 $"'{assembly.GetName().Name}' declares {candidates.Length} public types named '{typeName}'."));
 
         return candidates[0];
-    }
-
-    /// <summary>Walks up from the test assembly's location to the directory holding <c>Cbix.sln</c>.</summary>
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cbix.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        Assert.True(
-            directory is not null,
-            $"No directory containing 'Cbix.sln' was found above '{AppContext.BaseDirectory}'.");
-
-        return directory!.FullName;
     }
 
     private IDocumentContentProvider RequireProvider() =>

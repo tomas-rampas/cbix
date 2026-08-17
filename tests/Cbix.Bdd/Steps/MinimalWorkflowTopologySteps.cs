@@ -1,12 +1,11 @@
 using System.Reflection;
 
+using Cbix.Agnosticism;
 using Cbix.Bdd.Support;
-using Cbix.Core.Documents;
 using Cbix.Core.Hosting;
 using Cbix.Core.Ingest;
 using Cbix.Core.Workflows;
 
-using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -37,7 +36,7 @@ namespace Cbix.Bdd.Steps;
 public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState state)
 {
     /// <summary>The specimen named by the story's Gherkin, relative to the repository's data directory.</summary>
-    private const string SpecimenFileName = "Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf";
+    private const string SpecimenFileName = RepositoryLayout.DeSpecimenFileName;
 
     /// <summary>What the canned model answers triage with.</summary>
     private const string CannedTriageAnswer = "Cross-border trading legal instruction, DE.";
@@ -240,35 +239,33 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
     /// PDF rather than a fixture built to be easy.
     /// </para>
     /// <para>
-    /// The text-only capability is configured because it is the one the whole run can be driven under
-    /// with no provider present. That is not a way of avoiding the Claude profile: which profile a
-    /// capability selects is proved by the composition tests, and this feature is about the topology.
+    /// <b>The composition itself is <c>Cbix.Agnosticism</c>'s, shared with story S01-09's proof rather
+    /// than copied for it.</b> Both features need the identical thing - the production
+    /// <c>AddCbixWorkflow</c> with a stub chat client behind the triage agent - and two copies would
+    /// drift, leaving the agnosticism gate guarding a topology this feature no longer describes. It
+    /// also puts the stub in an assembly with no provider on its reference table, which is what makes
+    /// S01-09's dependency-graph assertion answerable at all.
+    /// </para>
+    /// <para>
+    /// The text-only capability that composition configures is the one the whole run can be driven
+    /// under with no provider present. That is not a way of avoiding the Claude profile: which profile
+    /// a capability selects is proved by the composition tests, and this feature is about the topology.
     /// </para>
     /// </remarks>
     private void Compose()
     {
-        string ingestRoot = Path.Combine(FindRepositoryRoot(), "data");
-        string specimenPath = Path.Combine(ingestRoot, SpecimenFileName);
-
-        Assert.True(File.Exists(specimenPath), $"The DE specimen is missing from the repository at '{specimenPath}'.");
-
-        CountingChatClient chatClient = new(CannedTriageAnswer);
+        StubChatClient chatClient = new(CannedTriageAnswer);
 
         ServiceCollection services = [];
         services.AddLogging();
-        services.AddCbixWorkflow(
-            new DocumentIngestOptions(ingestRoot, DocumentIngestOptions.ClaudeFilesApiLimitBytes),
-            new DocumentPresentationOptions(DocumentPresentationCapability.TextOnly));
-        services.AddKeyedSingleton<AIAgent>(
-            CbixWorkflowNodes.Triage,
-            (_, _) => new ChatClientAgent(chatClient, name: CbixWorkflowNodes.Triage));
+        services.AddStubBackedCbixWorkflow(RepositoryLayout.DataDirectory(), chatClient);
 
         ServiceProvider container = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateScopes = true,
         });
 
-        state.SpecimenPath = specimenPath;
+        state.SpecimenPath = RepositoryLayout.DeSpecimenPath();
         state.ChatClient = chatClient;
         state.Container = container;
 
@@ -326,24 +323,7 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
             "No workflow was composed; a Given step must run before this one.");
 
     /// <summary>The canned chat client, or a failure naming the step that should have created it.</summary>
-    private CountingChatClient ChatClient =>
+    private StubChatClient ChatClient =>
         state.ChatClient ?? throw new InvalidOperationException(
             "No chat client was composed; a Given step must run before this one.");
-
-    /// <summary>Walks up from the test assembly's location to the directory holding <c>Cbix.sln</c>.</summary>
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cbix.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        Assert.True(
-            directory is not null,
-            $"No directory containing 'Cbix.sln' was found above '{AppContext.BaseDirectory}'.");
-
-        return directory!.FullName;
-    }
 }

@@ -33,7 +33,7 @@ public sealed class IngestClaudeUploadSteps(IngestClaudeUploadState state)
 {
     private const string ProviderAssemblyName = "Cbix.Providers.Anthropic";
 
-    private const string SpecimenFileName = "Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf";
+    private const string SpecimenFileName = RepositoryLayout.DeSpecimenFileName;
 
     private const string DummyApiKey = "bdd-scenario-placeholder-key-not-a-real-credential";
 
@@ -320,7 +320,7 @@ public sealed class IngestClaudeUploadSteps(IngestClaudeUploadState state)
     /// <summary>Wires a real ingest service whose document-content provider is the Claude profile.</summary>
     private void ArrangeIngestWithClaudeProfile()
     {
-        string ingestRoot = Path.Combine(FindRepositoryRoot(), "data");
+        string ingestRoot = RepositoryLayout.DataDirectory();
         string specimenPath = Path.Combine(ingestRoot, SpecimenFileName);
 
         Assert.True(File.Exists(specimenPath), $"The DE specimen is missing from the repository at '{specimenPath}'.");
@@ -519,20 +519,6 @@ public sealed class IngestClaudeUploadSteps(IngestClaudeUploadState state)
         Assert.NotNull(messages.Body);
 
         return JsonDocument.Parse(messages.Body!).RootElement;
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cbix.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        Assert.True(directory is not null, $"No directory containing 'Cbix.sln' was found above '{AppContext.BaseDirectory}'.");
-
-        return directory!.FullName;
     }
 
     private string RequireSpecimenPath() =>

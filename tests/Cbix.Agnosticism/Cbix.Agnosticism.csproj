@@ -1,0 +1,72 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Solution-wide settings come from /Directory.Build.props; the test-project defaults
+       come from /tests/Directory.Build.props and are partly UNDONE below (see the Remove
+       block). Package versions come from /Directory.Packages.props (CPM). -->
+  <PropertyGroup>
+    <RootNamespace>Cbix.Agnosticism</RootNamespace>
+    <AssemblyName>Cbix.Agnosticism</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    WHY THIS PROJECT EXISTS AT ALL, since a stub chat client is three lines and could have
+    lived in Cbix.Bdd's Support folder.
+
+    Story S01-09 asserts that no assembly reachable from the RUN's dependency graph is
+    Microsoft.Agents.AI.Anthropic. The run executes the stub chat client, so the stub's
+    declaring assembly is part of that graph by any honest reading. Cbix.Bdd references
+    Cbix.Providers.Anthropic - deliberately and permanently, because S01-08's scenarios test
+    the adapter - so a stub declared there would put the provider one hop away from the
+    graph the gate walks. The choice then would be to exclude the test assembly by fiat,
+    which is exactly the move that turns a gate into theatre.
+
+    Declaring the stub and its composition here instead removes the exclusion: every
+    assembly whose code the run executes is walked, and none of them reaches the provider.
+    This project's own reference table is the build-time half of the story's evidence.
+  -->
+
+  <!--
+    Undoes the shared test stack that /tests/Directory.Build.props adds to every project
+    under tests/. This is a support LIBRARY, not a test project, and both halves of that
+    matter:
+
+      - Microsoft.NET.Test.Sdk is what marks a project as a test project. Left in, this
+        assembly would be collected by `dotnet test Cbix.sln`, discover zero tests, and -
+        with TreatNoTestsAsError=true in /.runsettings - fail the whole run.
+      - xunit in the reference table would put the test framework inside the dependency
+        closure this project exists to keep small and inspectable.
+
+    Remove rather than a condition in the props file: the items are defined by an import
+    that has already run, so removing them here is deterministic and keeps the exception
+    next to the reason for it.
+  -->
+  <ItemGroup>
+    <PackageReference Remove="coverlet.collector" />
+    <PackageReference Remove="Microsoft.NET.Test.Sdk" />
+    <PackageReference Remove="xunit" />
+    <PackageReference Remove="xunit.runner.visualstudio" />
+    <Using Remove="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IChatClient: the neutral currency the stub implements (design 3). -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <!-- ChatClientAgent - the neutral MAF path from an IChatClient to an AIAgent. This is the
+         one place the solution constructs an agent WITHOUT a provider package, which is the
+         mechanism the whole story rests on: the Anthropic adapter's AsAIAgent hands back the
+         same type, so the workflow cannot tell the two apart. -->
+    <PackageReference Include="Microsoft.Agents.AI" />
+    <!-- Abstractions only. This project registers services into a collection the caller owns;
+         building the container, choosing logging sinks and owning the scope stay with the
+         caller, exactly as they stay with the host in production. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The production composition under test. Note what is NOT here and must never be: a
+         reference to Cbix.Providers.Anthropic. The gate this project serves would still
+         report it correctly, but it would report it as a failure. -->
+    <ProjectReference Include="..\..\src\Cbix.Core\Cbix.Core.csproj" />
+  </ItemGroup>
+
+</Project>
