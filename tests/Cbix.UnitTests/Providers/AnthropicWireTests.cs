@@ -42,6 +42,21 @@ public sealed class AnthropicWireTests
     private const string HostileEndpoint = "https://attacker.example.invalid";
     private const string ProxyEndpoint = "https://egress-proxy.internal.example";
 
+    /// <summary>
+    /// The messages route, as the SDK's beta service spells it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The <c>?beta=true</c> is not incidental, and it appeared here deliberately (S01-12).</b> The
+    /// factory builds agents on the SDK's beta message service because the document block, its
+    /// <c>file_id</c> source and its one-hour <c>cache_control</c> TTL are beta surfaces - a
+    /// non-beta agent has no way to carry any of them, and attaching them to one fails silently
+    /// rather than loudly. Every agent in this pipeline reads a document, so one uniform path is
+    /// safer than a mixed estate in which the silent-drop trap stays reachable. What these tests
+    /// actually defend - the host, the credential header, the absence of a bearer token - is
+    /// unchanged by the route.
+    /// </remarks>
+    private const string MessagesRoute = "/v1/messages?beta=true";
+
     [Fact]
     public async Task OutboundRequest_GoesToTheConfiguredEndpointNotTheAmbientOne()
     {
@@ -54,7 +69,7 @@ public sealed class AnthropicWireTests
 
         CapturingHandler handler = await RunOneRequestAsync();
 
-        Assert.Equal("https://api.anthropic.com/v1/messages", handler.RequestUri?.AbsoluteUri);
+        Assert.Equal($"https://api.anthropic.com{MessagesRoute}", handler.RequestUri?.AbsoluteUri);
         Assert.Equal(ExplicitKey, handler.Header("X-Api-Key"));
         Assert.Null(handler.Header("Authorization"));
     }
@@ -69,7 +84,7 @@ public sealed class AnthropicWireTests
 
         CapturingHandler handler = await RunOneRequestAsync(options => options.BaseUrl = ProxyEndpoint);
 
-        Assert.Equal($"{ProxyEndpoint}/v1/messages", handler.RequestUri?.AbsoluteUri);
+        Assert.Equal($"{ProxyEndpoint}{MessagesRoute}", handler.RequestUri?.AbsoluteUri);
         Assert.Equal(ExplicitKey, handler.Header("X-Api-Key"));
     }
 
@@ -118,7 +133,7 @@ public sealed class AnthropicWireTests
 
         CapturingHandler handler = await RunOneRequestAsync();
 
-        Assert.Equal("https://api.anthropic.com/v1/messages", handler.RequestUri?.AbsoluteUri);
+        Assert.Equal($"https://api.anthropic.com{MessagesRoute}", handler.RequestUri?.AbsoluteUri);
         Assert.Equal(ExplicitKey, handler.Header("X-Api-Key"));
         Assert.Null(handler.Header("Authorization"));
     }

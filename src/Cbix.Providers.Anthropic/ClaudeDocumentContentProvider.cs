@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 
 using Cbix.Core.Documents;
+using Cbix.Core.Ingest;
 
 using global::Anthropic;
 using global::Anthropic.Core;
@@ -127,6 +128,18 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
 
     /// <summary>The provider answered, but with a throttle, a server error, or something unusable.</summary>
     internal const string ProviderFailure = "provider";
+
+    /// <summary>
+    /// The bytes on disk stopped matching the identity the registry hashed - the TOCTOU tripwire.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately its own kind rather than folded into <see cref="DocumentFailure"/>. A document
+    /// that cannot be read is an operational nuisance; a document whose <em>content changed between
+    /// the registry hashing it and this profile reading it</em> is either a corrupted share or an
+    /// attempt to swap forged bytes under an approved identity, and those two want different people
+    /// looking at them.
+    /// </remarks>
+    internal const string IntegrityFailure = "document-changed";
 
     /// <summary>
     /// How long a single upload attempt may take before it is abandoned.
@@ -339,11 +352,14 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
     ///   </description></item>
     /// </list>
     /// <para>
-    /// <b>The one-hour TTL is a beta the request must opt into.</b> It is carried on the
-    /// <em>message</em> call, not on this block, so the call site that attaches this content owns
-    /// sending it - the same call site that owes the attachment itself (see the class remarks and
-    /// the plan's S01-12 / S01-16 obligation). A request that carries the block without that opt-in
-    /// is refused by the API rather than quietly downgraded.
+    /// <b>The one-hour TTL travels with a beta opt-in, carried on the <em>message</em> call rather
+    /// than on this block.</b> The call site that attaches this content owns sending it - the same
+    /// call site that owes the attachment itself (see the class remarks and the plan's S01-12 /
+    /// S01-16 obligation). How firm that requirement is: it is derived from the pinned SDK's model,
+    /// which declares the TTL and the beta together, and not from a live call - current API
+    /// documentation describes the one-hour TTL without obviously gating it behind the beta. It is
+    /// sent because the two possible errors are not symmetric: an unnecessary header costs nothing,
+    /// a missing required one fails the call.
     /// </para>
     /// </remarks>
     private static DocumentContent Compose(DocumentReference document, string fileId)
@@ -553,6 +569,93 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
         }
     }
 
+    /// <summary>
+    /// Refuses to upload bytes that are no longer the bytes the registry hashed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The contract this rests on.</b> A registry-published
+    /// <see cref="DocumentReference.DocumentId"/> <em>is</em>
+    /// <see cref="ContentHash.Canonical"/> - the registry derives identity from the bytes it read and
+    /// stores that exact string (see <c>ContentHash.Canonical</c> and
+    /// <c>DocumentRegistryEntry</c>, which refuses an entry whose reference disagrees with its hash).
+    /// That linkage is what makes this check possible at all: the expected digest is already in the
+    /// identity, so verifying costs no extra plumbing and no extra state.
+    /// </para>
+    /// <para>
+    /// <b>The window it closes.</b> Ingest resolves containment and hashes through one handle, then
+    /// closes it; this profile re-opens the document <em>by path</em>. Between those two moments a
+    /// path component can be replaced with a link pointing elsewhere. Two things follow if nobody
+    /// looks: bytes from outside the ingest root are uploaded to a third-party API, and - worse -
+    /// forged content is extracted and then <em>passes</em> the grounding gate, because the text
+    /// layer is extracted from the same swapped file and every snippet is faithfully contained in it.
+    /// A grounding gate that agrees with a forged corpus is not a control at all.
+    /// </para>
+    /// <para>
+    /// <b>Why the digest is computed before the upload rather than while it streams.</b> Hashing
+    /// through the outbound stream would be one pass instead of two, but the verdict would arrive
+    /// after the bytes had already left the process - detecting an exfiltration rather than
+    /// preventing one, which is the wrong side of the only line that matters here. The cost is a
+    /// second read of a file that is bounded by the ingest gate's size cap and is almost certainly
+    /// still in the page cache. Correctness over cleverness, and the file handle is held open across
+    /// both passes with <see cref="FileShare.Read"/>, so the bytes verified are the bytes sent.
+    /// </para>
+    /// <para>
+    /// <b>What it does not close, stated rather than implied.</b> The text layer is extracted by
+    /// ingest from its own re-open of the same path, and this check cannot reach backwards to cover
+    /// that read. The window on the grounding corpus therefore remains, and is recorded as such; what
+    /// changes here is narrower and worth stating precisely: <em>the upload no longer ships
+    /// unverified bytes</em>, so nothing an agent is shown can be content the registry never hashed.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="DocumentPreparationException">
+    /// The identity is not a canonical content hash, or the bytes do not match it.
+    /// </exception>
+    private static async Task VerifyDigestAsync(
+        DocumentReference document,
+        FileStream stream,
+        CancellationToken cancellationToken)
+    {
+        ContentHash expected;
+        try
+        {
+            int separator = document.DocumentId.IndexOf(':', StringComparison.Ordinal);
+            expected = separator < 0
+                ? throw new FormatException("the identity carries no algorithm prefix")
+                : new ContentHash(document.DocumentId[..separator], document.DocumentId[(separator + 1)..]);
+        }
+        catch (Exception error) when (error is ArgumentException or FormatException)
+        {
+            // Not a hostile input so much as a broken contract: something other than the registry
+            // published this reference. Failing closed is the only safe reading, because the
+            // alternative is uploading bytes whose identity nothing can re-derive.
+            throw Fail(
+                document,
+                "its identity is not a canonical content hash, so the bytes about to be uploaded cannot be "
+                    + "verified against it. Registry-published references carry 'algorithm:hex'.",
+                isTransient: false,
+                IntegrityFailure,
+                error);
+        }
+
+        ContentHash actual = await ContentHash.ComputeSha256Async(stream, cancellationToken).ConfigureAwait(false);
+
+        if (!string.Equals(actual.Canonical, expected.Canonical, StringComparison.Ordinal))
+        {
+            throw Fail(
+                document,
+                "the document changed under the run - the bytes at its registered location no longer hash to "
+                    + $"its identity (found '{actual.Canonical}'). Nothing is uploaded: between the registry "
+                    + "hashing this document and this read, the file it names was replaced.",
+                isTransient: false,
+                IntegrityFailure);
+        }
+
+        // Rewound for the upload that follows. Same handle, so no second resolution of the path and
+        // no second opportunity to swap what it points at.
+        stream.Position = 0;
+    }
+
     /// <summary>Uploads the document to the Files API and returns the issued <c>file_id</c>.</summary>
     private async Task<string> UploadAsync(DocumentReference document, CancellationToken cancellationToken)
     {
@@ -572,6 +675,8 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
         }
 
         await using FileStream stream = OpenDocument(document);
+
+        await VerifyDigestAsync(document, stream, cancellationToken).ConfigureAwait(false);
 
         FileMetadata metadata;
         try
@@ -602,8 +707,14 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
         // reported as a cancellation - which is the right answer anyway, because a caller that
         // cancelled has abandoned the run and has nothing to do with a status code it never waited
         // for.
-        catch (Exception error) when (cancellationToken.IsCancellationRequested)
+        catch (Exception error) when (cancellationToken.IsCancellationRequested && error is not OutOfMemoryException)
         {
+            // OutOfMemoryException is excluded for the reason the ingest ports and
+            // LocalDocumentContentProfile both state: it is a resource-exhaustion signal - the
+            // observable symptom of a decompression bomb - and re-labelling it as a cancellation
+            // would file an attack indicator as "the caller changed its mind". It propagates as
+            // itself.
+            //
             // The port says caller cancellation surfaces as OperationCanceledException, not as a
             // transient preparation failure a retry policy would sit and back off on.
             throw new OperationCanceledException(

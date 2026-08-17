@@ -2,8 +2,11 @@ using Cbix.Core.Documents;
 
 using global::Anthropic;
 using global::Anthropic.Core;
+using global::Anthropic.Models.Beta.Messages;
+using global::Anthropic.Services;
 
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
 namespace Cbix.Providers.Anthropic;
 
@@ -210,35 +213,145 @@ public sealed class AnthropicAgentFactory : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(instructions);
 
-        if (modelId is not null)
-        {
-            // An explicitly supplied blank model is a configuration bug, not a request to fall
-            // back: silently substituting the default would run a Sonnet-tier agent on Haiku and
-            // show up only as degraded matrix accuracy.
-            ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        string model = ResolveModel(modelId);
+        int tokens = ResolveMaxOutputTokens(maxOutputTokens);
 
-            // The per-call override is the other way a floating alias enters the pipeline, and the
-            // likelier one: the tiered call sites name their model in code, where 'claude-sonnet-4-6'
-            // reads as perfectly reasonable. Checked here as well as in Validate() so neither route
-            // is left open.
-            if (!AnthropicProviderOptions.IsDatedSnapshot(modelId))
-            {
-                throw new ArgumentException(
-                    AnthropicProviderOptions.DescribeAliasHazard(nameof(modelId), modelId),
-                    nameof(modelId));
-            }
-        }
-
-        if (maxOutputTokens is { } requestedTokens)
-        {
-            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(requestedTokens, 0);
-        }
-
-        return _client.AsAIAgent(
-            model: modelId ?? _defaultModelId,
+        return _client.Beta.AsAIAgent(
+            model: model,
             instructions: instructions,
             name: name,
-            defaultMaxTokens: maxOutputTokens ?? _defaultMaxOutputTokens);
+            defaultMaxTokens: tokens);
+    }
+
+    /// <summary>
+    /// Creates an agent bound to one prepared document, together with the run options that actually
+    /// deliver that document to the model.
+    /// </summary>
+    /// <param name="name">Agent name as used in the workflow graph.</param>
+    /// <param name="instructions">The agent's system instructions.</param>
+    /// <param name="document">
+    /// The document as this adapter's own profile prepared it. It must have come from the Claude
+    /// native-PDF profile: the blocks inside it are Claude request blocks, and no other profile's
+    /// content can be attached this way.
+    /// </param>
+    /// <param name="modelId">
+    /// Exact, dated model snapshot, or <see langword="null"/> for the configured default. Applied to
+    /// the agent and to the outbound request from this one argument - see the remarks for why that
+    /// matters more than it looks.
+    /// </param>
+    /// <param name="maxOutputTokens">Per-response output cap, or <see langword="null"/> for the configured default.</param>
+    /// <returns>
+    /// A binding whose <see cref="BoundDocumentAgent.RunAsync"/> is the only way to reach the model
+    /// with this document attached.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>This method exists because producing a document block does not send one.</b> Measured on
+    /// the pinned packages (S01-05): MAF's Anthropic integration silently drops an
+    /// <c>AIContent</c> whose only payload is <c>RawRepresentation</c>, so content prepared by the
+    /// port and attached to a <c>ChatMessage</c> never reaches <c>/v1/messages</c> - and the model
+    /// answers, fluently, about a document it was never shown. The supported route is the
+    /// integration's escape hatch, <c>ChatOptions.RawRepresentationFactory</c>, and it is wired here
+    /// so that no call site has to know that.
+    /// </para>
+    /// <para>
+    /// <b>Two beta opt-ins ride with it.</b> <c>files-api-2025-04-14</c> is what allows a document
+    /// block to reference an uploaded file at all. <c>extended-cache-ttl-2025-04-11</c> accompanies
+    /// the one-hour <c>cache_control</c> TTL the profile marks the block with - and the strength of
+    /// that second claim is worth stating exactly, because it has been overstated before. Its
+    /// provenance is the pinned SDK's own model: the TTL and the beta are declared together, and the
+    /// SDK's beta enum names the flag. It has <em>not</em> been verified against the live API, and
+    /// current API documentation describes the one-hour TTL without obviously gating it behind this
+    /// beta. So it is sent on a safe-direction argument rather than a measurement: an unnecessary
+    /// beta header costs nothing, while a missing required one fails the call, and the two errors are
+    /// not symmetric. The <c>@requiresApi</c> lane pins the real answer whenever someone runs it.
+    /// </para>
+    /// <para>
+    /// <b>Why the model is resolved once, here.</b> Measured: the values on the object returned by
+    /// <c>RawRepresentationFactory</c> <em>win</em> over the agent's own chat options - a raw
+    /// <c>Model</c> of <c>"anything"</c> was observed on the wire in place of the agent's configured
+    /// snapshot. Split across two calls, that is a silent tiering bug: an agent built for Sonnet
+    /// would run on whatever the attachment named, and the only symptom would be degraded matrix
+    /// accuracy. Resolving both here and handing them to a binding that rebuilds the request itself
+    /// is what removes the possibility - a caller never holds the two halves separately, so it cannot
+    /// pair them wrongly.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> or <paramref name="instructions"/> is empty; a supplied
+    /// <paramref name="modelId"/> is empty or is not a dated snapshot; or
+    /// <paramref name="document"/> was not prepared by the Claude native-PDF profile.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxOutputTokens"/> is supplied and is not greater than zero.</exception>
+    /// <exception cref="ObjectDisposedException">The factory has been disposed.</exception>
+    public BoundDocumentAgent CreateDocumentAgent(
+        string name,
+        string instructions,
+        DocumentContent document,
+        string? modelId = null,
+        int? maxOutputTokens = null)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instructions);
+        ArgumentNullException.ThrowIfNull(document);
+
+        string model = ResolveModel(modelId);
+        int tokens = ResolveMaxOutputTokens(maxOutputTokens);
+
+        IReadOnlyList<BetaContentBlockParam> blocks = ClaudeDocumentAttachment.DescribeBlocks(document);
+
+        AIAgent agent = _client.Beta.AsAIAgent(
+            model: model,
+            instructions: instructions,
+            name: name,
+            defaultMaxTokens: tokens);
+
+        // One resolved model and one resolved cap reach both halves. The binding rebuilds the request
+        // from these on every call, so there is no options object anyone can mis-pair or mutate.
+        return new BoundDocumentAgent(agent, blocks, model, tokens);
+    }
+
+    /// <summary>Resolves and validates the model for one agent.</summary>
+    /// <remarks>
+    /// An explicitly supplied blank model is a configuration bug, not a request to fall back:
+    /// silently substituting the default would run a Sonnet-tier agent on Haiku and show up only as
+    /// degraded matrix accuracy. The alias check is repeated here as well as in
+    /// <see cref="AnthropicProviderOptions.Validate"/> because the per-call override is the likelier
+    /// route - the tiered call sites name their model in code, where 'claude-sonnet-4-6' reads as
+    /// perfectly reasonable.
+    /// </remarks>
+    private string ResolveModel(string? modelId)
+    {
+        if (modelId is null)
+        {
+            return _defaultModelId;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        if (!AnthropicProviderOptions.IsDatedSnapshot(modelId))
+        {
+            throw new ArgumentException(
+                AnthropicProviderOptions.DescribeAliasHazard(nameof(modelId), modelId),
+                nameof(modelId));
+        }
+
+        return modelId;
+    }
+
+    /// <summary>Resolves and validates the per-response output cap.</summary>
+    private int ResolveMaxOutputTokens(int? maxOutputTokens)
+    {
+        if (maxOutputTokens is not { } requested)
+        {
+            return _defaultMaxOutputTokens;
+        }
+
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(requested, 0);
+
+        return requested;
     }
 
     /// <summary>

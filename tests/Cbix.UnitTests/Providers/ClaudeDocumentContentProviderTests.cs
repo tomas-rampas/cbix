@@ -459,6 +459,81 @@ public sealed class ClaudeDocumentContentProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Prepare_RefusesToUploadBytesThatChangedAfterTheRegistryHashedThem()
+    {
+        // The TOCTOU tripwire, exercised by doing the actual swap: ingest hashes through one handle
+        // and closes it, this profile re-opens by path, and between those moments the file is
+        // replaced. Without this check the forged bytes go to Anthropic AND - because the text layer
+        // is extracted from the same swapped file - every snippet from them passes the grounding
+        // gate under the legitimate document's identity.
+        using Harness harness = Harness.Create(this);
+        DocumentReference registered = Document("de-specimen.pdf");
+
+        // The swap. Same path, same identity, different bytes.
+        File.WriteAllText(Path.Combine(_root, "de-specimen.pdf"), "%PDF-1.7\nforged content\n%%EOF\n");
+
+        DocumentPreparationException error = await Assert.ThrowsAsync<DocumentPreparationException>(
+            () => harness.Provider.PrepareAsync(registered));
+
+        Assert.False(error.IsTransient, "Forged bytes are not a condition of the moment.");
+        Assert.Equal("document-changed", FailureKind(error));
+        Assert.Contains("changed under the run", error.Message, StringComparison.Ordinal);
+
+        // Nothing left the process. Detecting an exfiltration after the fact would be the wrong side
+        // of the only line that matters here.
+        Assert.Equal(0, harness.Api.UploadCount);
+    }
+
+    [Fact]
+    public async Task Prepare_RefusesAnIdentityThatIsNotAContentHash()
+    {
+        // A reference whose identity nothing can re-derive from the bytes did not come from the
+        // registry, and the digest check has nothing to verify against. Failing closed is the only
+        // reading that does not upload unverifiable bytes.
+        using Harness harness = Harness.Create(this);
+        string path = Path.Combine(_root, "de-specimen.pdf");
+        File.WriteAllText(path, DocumentBytes);
+
+        DocumentPreparationException error = await Assert.ThrowsAsync<DocumentPreparationException>(
+            () => harness.Provider.PrepareAsync(
+                new DocumentReference("submitter-supplied-identity", new Uri(path), "de-specimen.pdf")));
+
+        Assert.False(error.IsTransient);
+        Assert.Equal("document-changed", FailureKind(error));
+        Assert.Equal(0, harness.Api.UploadCount);
+    }
+
+    [Fact]
+    public async Task Prepare_UploadsTheVerifiedBytesInFull()
+    {
+        // Guards the guard: the digest pass reads the stream to its end, so a rewind that was
+        // forgotten would upload nothing at all while every other assertion still passed.
+        using Harness harness = Harness.Create(this);
+
+        await harness.Provider.PrepareAsync(Document("de-specimen.pdf"));
+
+        Assert.Contains(DocumentBytes, harness.Api.LastUploadBody!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Prepare_LetsResourceExhaustionPropagateEvenWhileCancelling()
+    {
+        // The uniform rule the ingest ports and LocalDocumentContentProfile both state: an
+        // OutOfMemoryException is the observable symptom of a decompression bomb, so re-labelling it
+        // costs an attack indicator. The cancellation filter here is broad by necessity - the token,
+        // not the exception type, decides - which is exactly why it has to make this one exception.
+        using CancellationTokenSource cancellation = new();
+        using Harness harness = Harness.Create(this, api =>
+        {
+            api.OnRequest = () => cancellation.Cancel();
+            api.ExhaustionFailure = true;
+        });
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(
+            () => harness.Provider.PrepareAsync(Document("de-specimen.pdf"), cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
     public async Task CreateDocumentContentProvider_GivesEachRunScopeItsOwnMemo()
     {
         // The port makes the run-scoped lifetime part of the contract. This is what would fail if
@@ -650,6 +725,12 @@ public sealed class ClaudeDocumentContentProviderTests : IDisposable
         /// <summary>Runs when a request arrives, so a test can cancel mid-upload.</summary>
         internal Action? OnRequest { get; set; }
 
+        /// <summary>
+        /// When set, the transport fails the way a decompression bomb does: resource exhaustion, not
+        /// a data-quality outcome.
+        /// </summary>
+        internal bool ExhaustionFailure { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -669,6 +750,11 @@ public sealed class ClaudeDocumentContentProviderTests : IDisposable
             }
 
             OnRequest?.Invoke();
+
+            if (ExhaustionFailure)
+            {
+                throw new OutOfMemoryException("The canned transport is simulating resource exhaustion.");
+            }
 
             if (NetworkFailure)
             {

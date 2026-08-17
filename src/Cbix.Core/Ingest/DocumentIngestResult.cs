@@ -39,25 +39,43 @@ public sealed class DocumentIngestResult
     /// The document's local text layer on a first registration; <see langword="null"/> on a
     /// duplicate, which is not prepared because its run does not continue.
     /// </param>
+    /// <param name="contentHandle">
+    /// The handle to the document as the active provider prepared it for the model - the Claude
+    /// profile's Files API <c>file_id</c>, for instance - or <see langword="null"/> when no
+    /// content provider was configured, or when this submission was a duplicate.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="submitted"/> or <paramref name="registered"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="submitted"/> and <paramref name="registered"/> do not share an identity;
-    /// <paramref name="textLayer"/> belongs to a different document; or <paramref name="textLayer"/>
-    /// does not match <paramref name="isNewRegistration"/>.
+    /// <paramref name="textLayer"/> or <paramref name="contentHandle"/> belongs to a different
+    /// document; or either does not match <paramref name="isNewRegistration"/>.
     /// </exception>
     /// <remarks>
+    /// <para>
     /// <b><paramref name="textLayer"/> is a required argument, and both directions of its invariant
     /// are enforced.</b> A registered document is always prepared and a duplicate never is
     /// (design 5.1), so exactly one of the two shapes is valid - and a nullable parameter with a
     /// default would let the wrong one compile silently at the one call site that matters. Making the
     /// caller state it means a future change to that rule has to come here and argue with this check,
     /// rather than slip through as a forgotten argument.
+    /// </para>
+    /// <para>
+    /// <b><paramref name="contentHandle"/> is required for the same reason but carries a weaker
+    /// invariant, deliberately.</b> Only one direction can be checked here: a
+    /// duplicate must never carry a handle, because its run stops at the registry. The converse - a
+    /// new registration always carries one - is <em>not</em> true and must not be asserted, because
+    /// whether any provider is configured at all is a composition decision this type cannot see
+    /// (S01-13 owns that wiring, and the text-only and generic-vision profiles are legitimate active
+    /// choices). The honest invariant is therefore "a handle implies a new registration", and it is
+    /// enforced in that direction only.
+    /// </para>
     /// </remarks>
     public DocumentIngestResult(
         DocumentReference submitted,
         DocumentRegistryEntry registered,
         bool isNewRegistration,
-        TextLayer? textLayer)
+        TextLayer? textLayer,
+        DocumentContentHandle? contentHandle)
     {
         ArgumentNullException.ThrowIfNull(submitted);
         ArgumentNullException.ThrowIfNull(registered);
@@ -93,10 +111,29 @@ public sealed class DocumentIngestResult
                 nameof(textLayer));
         }
 
+        if (!isNewRegistration && contentHandle is not null)
+        {
+            throw new ArgumentException(
+                "A duplicate submission must not carry a document content handle: its run stops at the registry, "
+                    + "so nothing was prepared for it and no upload was paid for.",
+                nameof(contentHandle));
+        }
+
+        if (contentHandle is not null && !string.Equals(contentHandle.DocumentId, registered.DocumentId, StringComparison.Ordinal))
+        {
+            // The same reasoning as the text layer's check, one step more dangerous: this handle names
+            // a remote artefact that agents will be shown. A handle from another document would have
+            // every extracted value recorded against these bytes while the model read different ones.
+            throw new ArgumentException(
+                $"The content handle belongs to document '{contentHandle.DocumentId}', not to '{registered.DocumentId}'.",
+                nameof(contentHandle));
+        }
+
         Submitted = submitted;
         Registered = registered;
         IsNewRegistration = isNewRegistration;
         TextLayer = textLayer;
+        ContentHandle = contentHandle;
     }
 
     /// <summary>Gets the reference to the document as read on this submission.</summary>
@@ -121,6 +158,26 @@ public sealed class DocumentIngestResult
     /// re-parsing the PDF once per field (design 5.1, 5.6).
     /// </remarks>
     public TextLayer? TextLayer { get; }
+
+    /// <summary>
+    /// Gets the handle to the document as the active provider prepared it for the model, or
+    /// <see langword="null"/> when this submission was a duplicate or no provider was configured.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the run's document handle: the thing triage (S01-14) and the section agents (S01-16)
+    /// carry instead of the document itself, and the thing a checkpoint persists. Ingest is where it
+    /// is created because ingest is the only step that knows a submission is new, and therefore the
+    /// only step that can guarantee the provider's expensive preparation happens once.
+    /// </para>
+    /// <para>
+    /// <b>It is a handle, not the content.</b> Re-obtaining the content blocks means handing this
+    /// back to <see cref="IDocumentContentProvider.PrepareAsync"/>, which is what makes a resumed run
+    /// free; see <see cref="DocumentContentHandle"/> for why the prepared content itself must never
+    /// be checkpointed.
+    /// </para>
+    /// </remarks>
+    public DocumentContentHandle? ContentHandle { get; }
 
     /// <summary>Gets the content hash of the submitted bytes.</summary>
     public ContentHash ContentHash => Registered.ContentHash;

@@ -99,6 +99,32 @@ public sealed partial class DocumentIngestService
     private readonly IDocumentRegistry _registry;
     private readonly IIngestAuditLog _auditLog;
     private readonly ITextLayerExtractor _textLayerExtractor;
+
+    /// <summary>
+    /// The active document-content profile, or <see langword="null"/> when none is configured.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Typed as the port, never as a profile.</b> Ingest must not be able to tell whether the
+    /// Claude native-PDF profile, the generic-vision profile or the text-only fallback is underneath;
+    /// that is the whole point of design 5.1's port, and the reason a provider swap stays a
+    /// configuration change.
+    /// </para>
+    /// <para>
+    /// <b>Optional, and the option is the composition root's to exercise.</b> Ingest is meaningful
+    /// without a model - registration, containment and the text layer are all local - so a null here
+    /// is a configuration, not a degraded mode: the result simply carries no content handle. Which
+    /// profile is active, and whether one is, is S01-13's composition decision.
+    /// </para>
+    /// <para>
+    /// <b>Its lifetime is the caller's problem, and it is a real one.</b> The port requires one
+    /// provider instance per workflow run, because the instance holds the "upload once" memo. An
+    /// ingest service that outlives a run - a singleton - must therefore be handed a provider that
+    /// does not, which in practice means both are run-scoped. S01-13 owns that registration and the
+    /// test that asserts the scope.
+    /// </para>
+    /// </remarks>
+    private readonly IDocumentContentProvider? _documentContentProvider;
     private readonly ILogger<DocumentIngestService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly DocumentIngestOptions _options;
@@ -119,6 +145,10 @@ public sealed partial class DocumentIngestService
     /// <see cref="TimeProvider.System"/>; tests inject a controlled clock so that "first seen" and
     /// "recorded at" are assertable rather than approximately now.
     /// </param>
+    /// <param name="documentContentProvider">
+    /// The active document-content profile, or <see langword="null"/> to register and extract without
+    /// preparing the document for a model.
+    /// </param>
     /// <exception cref="ArgumentNullException">Any required argument is <see langword="null"/>.</exception>
     /// <exception cref="IOException">
     /// A cyclic link was found while resolving the configured ingest root, or the file system failed
@@ -133,7 +163,8 @@ public sealed partial class DocumentIngestService
         DocumentIngestOptions options,
         ITextLayerExtractor textLayerExtractor,
         ILogger<DocumentIngestService> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IDocumentContentProvider? documentContentProvider = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(auditLog);
@@ -147,6 +178,7 @@ public sealed partial class DocumentIngestService
         _options = options;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _documentContentProvider = documentContentProvider;
 
         // Two spellings of one directory, and both are needed.
         //
@@ -177,7 +209,8 @@ public sealed partial class DocumentIngestService
     /// <returns>
     /// The reference to the document as read, the registry entry now standing for these bytes,
     /// whether this submission was the one that created it, and - only when it did - the local text
-    /// layer extracted for it.
+    /// layer extracted for it and, when a document-content profile is configured, the handle to the
+    /// document as that profile prepared it for the model.
     /// </returns>
     /// <exception cref="ArgumentException">
     /// <paramref name="documentPath"/> or <paramref name="mediaType"/> is empty or white space, or
@@ -192,6 +225,15 @@ public sealed partial class DocumentIngestService
     /// The submission is inside the root but is not a usable document: a directory, an empty file,
     /// one larger than the configured maximum, or - raised after registration, by the text-layer
     /// extraction step - a file the local PDF parser cannot read.
+    /// </exception>
+    /// <exception cref="DocumentPreparationException">
+    /// The configured document-content profile could not present the document - raised after
+    /// registration, like the extraction failure above, and for the same reason: the registry records
+    /// document identity, not run state. <see cref="DocumentPreparationException.IsTransient"/> says
+    /// which response the failure wants. It is deliberately not swallowed into a handle-less result:
+    /// a caller cannot distinguish "no profile configured" from "the upload failed" by looking at a
+    /// null handle, and a run that silently lost its document surfaces as every agent answering about
+    /// a document it was never shown.
     /// </exception>
     /// <exception cref="FileNotFoundException">There is no file at the resolved path.</exception>
     /// <exception cref="DirectoryNotFoundException">Part of the resolved path does not exist.</exception>
@@ -334,7 +376,56 @@ public sealed partial class DocumentIngestService
             ? await _textLayerExtractor.ExtractAsync(submitted, cancellationToken).ConfigureAwait(false)
             : null;
 
-        return new DocumentIngestResult(submitted, registration.Entry, registration.IsNewRegistration, textLayer);
+        // Presenting the document to the model, and it is gated on exactly the same condition as the
+        // text layer above, for exactly the same reason: a duplicate's run stops at the registry, so
+        // preparing one would pay for a Files API upload that no agent will ever read (design 5.1).
+        //
+        // The memo inside the provider would make a second call cheap, but "cheap" is not the bar -
+        // ingest does not ask at all, so the short-circuit stays a property of this method rather
+        // than a property of whichever profile happens to be configured. A profile with no memo, or
+        // one whose preparation is a page-image render rather than an upload, gets the same
+        // guarantee.
+        //
+        // Ordering: after the text layer, because the text layer is local and free while this is a
+        // network call against a paid API - failing on the cheap local step first means a document
+        // that cannot be read at all never reaches the provider. After the audit entry for the reason
+        // stated above: the registration happened, and the trail says so whatever follows.
+        //
+        // Failure propagates rather than degrading, and the choice is deliberate. A transient failure
+        // is the retry layer's food (design 9), and a permanent one must reach the review queue - so
+        // neither may be swallowed into a result that reads as success while carrying no handle.
+        // Downstream cannot tell "no provider configured" from "the upload failed" by looking at a
+        // null handle, and a run that silently lost its document would surface as every agent
+        // answering about a document it was never shown. The cost, stated as plainly as the text
+        // layer's: registration and its audit entry survive the failure, so a re-submission is a
+        // duplicate and never re-prepares. Recovering that document belongs to Sprint 03's
+        // extraction_runs and review queue, exactly as it does for a failed extraction.
+        DocumentContentHandle? contentHandle = null;
+        if (registration.IsNewRegistration && _documentContentProvider is not null)
+        {
+            DocumentContent prepared;
+            try
+            {
+                prepared = await _documentContentProvider
+                    .PrepareAsync(submitted, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (DocumentPreparationException error)
+            {
+                LogPreparationFailure(error, submitted);
+
+                throw;
+            }
+
+            contentHandle = prepared.Handle;
+        }
+
+        return new DocumentIngestResult(
+            submitted,
+            registration.Entry,
+            registration.IsNewRegistration,
+            textLayer,
+            contentHandle);
     }
 
     /// <summary>
@@ -684,6 +775,79 @@ public sealed partial class DocumentIngestService
         string submittedPath,
         string resolvedPath,
         string ingestRoot);
+
+    /// <summary>
+    /// Key under which a profile records what <em>kind</em> of failure a
+    /// <see cref="DocumentPreparationException"/> was.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A duplicated string, deliberately.</b> The profiles that write it live in provider adapter
+    /// assemblies that <c>Cbix.Core</c> must never reference - that is the whole containment rule -
+    /// so the constant cannot be shared, and the alternative to duplicating it is not reading it at
+    /// all. The two spellings are held together by a test that drives a real credential failure
+    /// through this service and asserts the event below distinguishes it: if either side renames the
+    /// key, that test goes red rather than the signal silently disappearing.
+    /// </para>
+    /// <para>
+    /// <b>Why bother.</b> <see cref="DocumentPreparationException"/> carries one axis, transience,
+    /// which answers "retry or review" and nothing else. Without a second axis a revoked API key
+    /// arrives as N indistinguishable per-document review entries, and nobody learns that the fleet -
+    /// rather than the corpus - is broken.
+    /// </para>
+    /// </remarks>
+    private const string PreparationFailureKindKey = "cbix.document_preparation.failure_kind";
+
+    /// <summary>The failure kind a profile uses for a credential that is refused or not entitled.</summary>
+    private const string CredentialFailureKind = "credential";
+
+    /// <summary>Emits the right event for a preparation failure, separating a fleet problem from a document one.</summary>
+    private void LogPreparationFailure(DocumentPreparationException error, DocumentReference document)
+    {
+        string kind = error.Data[PreparationFailureKindKey] as string ?? "unspecified";
+
+        if (string.Equals(kind, CredentialFailureKind, StringComparison.Ordinal))
+        {
+            LogPreparationCredentialFailure(_logger, PathBoundary.ForLog(document.FileName), error.IsTransient);
+
+            return;
+        }
+
+        LogPreparationFailed(_logger, PathBoundary.ForLog(document.FileName), kind, error.IsTransient);
+    }
+
+    /// <summary>
+    /// Structured event for a preparation failure caused by the credential rather than the document.
+    /// </summary>
+    /// <remarks>
+    /// Its own event id, and that is the entire point of the split: this failure will repeat for
+    /// every document in the estate until a key is rotated, so it is the one an alert rule should
+    /// fire on. Folding it in with document-specific failures would bury a fleet-wide outage under
+    /// per-document noise. Critical rather than Error for the same reason - nothing else will
+    /// succeed either.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1015,
+        Level = LogLevel.Critical,
+        Message = "Document preparation was refused by the provider's credential, so every document will fail "
+            + "until it is repaired. Document='{DocumentName}', transient={IsTransient}.")]
+    private static partial void LogPreparationCredentialFailure(ILogger logger, string documentName, bool isTransient);
+
+    /// <summary>Structured event for a preparation failure that is a property of this document or this moment.</summary>
+    /// <remarks>
+    /// The kind is a value rather than an id because the set is a profile's to extend; the id says
+    /// "preparation failed", the kind says which way. Only the sanitised display name is logged - the
+    /// exception's own message reaches the caller, and it is the caller that decides what to persist.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1016,
+        Level = LogLevel.Error,
+        Message = "Document preparation failed. Document='{DocumentName}', kind={FailureKind}, transient={IsTransient}.")]
+    private static partial void LogPreparationFailed(
+        ILogger logger,
+        string documentName,
+        string failureKind,
+        bool isTransient);
 
     /// <summary>Structured event for a submission inside the root that is not a usable document.</summary>
     /// <remarks>See <see cref="LogContainmentRefusal"/> on why the sanitised paths are named in the template.</remarks>

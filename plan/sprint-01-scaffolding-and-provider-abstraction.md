@@ -166,7 +166,7 @@ Feature: Generic vision document content profile
     And no Files API or Anthropic-specific type is referenced anywhere in this profile
 ```
 
-Done means: profile is selected purely by the active provider's capability profile, per design §5.1's "only the strategy implementations know which profile is in play."
+Done means: profile is selected purely by the active provider's capability profile, per design §5.1's "only the strategy implementations know which profile is in play." **Scope note (peer-review round 7):** the selection *mechanism* is composition, and composition is S01-13's recorded scope — the clause is carried there as a binding obligation (see S01-13's Done means); this story delivered the profile itself. The tick stands on that split.
 
 ---
 
@@ -297,7 +297,7 @@ Done means: extracted text is persisted (or held in run state) such that Sprint 
 
 ---
 
-### [ ] S01-12 — Ingest executor uploads via the Claude profile and sets cache_control
+### [x] S01-12 — Ingest executor uploads via the Claude profile and sets cache_control
 
 As the pipeline
 I want ingest to invoke the Claude document-content profile exactly once per document
@@ -346,6 +346,8 @@ Feature: Minimal workflow topology
 Done means:
 - This topology is the one S01-09's agnosticism proof runs against, and the one S01-16 extends with the real DocControl agent.
 - **Composition ownership (recorded from Sprint 01 reviews):** `AddCbixWorker` currently registers only `TimeProvider`, `ISecretResolver`, `AnthropicAgentFactory` and the hosted worker — the ingest stack (`DocumentIngestService`, registry, audit log, `ITextLayerExtractor`, `DocumentIngestOptions`) and the document-content profiles are NOT yet in the container. Wiring them into the composed graph is this story's scope, so the gap between "S01-10/11/17 done" and "the host can actually ingest" has an owner. The workflow-graph composition itself lands in `Cbix.Core` per the CLAUDE.md composition-root note. Profile registrations must be run-scoped with a test asserting the scope (a singleton registration would retain every document's rendered pixels for process lifetime — S01-06 security review).
+- **Document-agent seam relocation (S01-12 review):** `BoundDocumentAgent` (the run-callable agent+options pair) currently lives in `Cbix.Providers.Anthropic`, so a consumer of a document-bound agent references the adapter — a deliberate, recorded interim confinement to the Worker composition root. When this story takes Core's MAF dependency for `WorkflowBuilder`, relocate the neutral callable shape (AIAgent + AgentRunOptions + RunAsync) to `Cbix.Core` so provider swap stays configuration, per CLAUDE.md's hard requirement.
+- **Capability-driven profile selection (moved from S01-06's Done means, peer-review round 7):** the composed graph selects the active `IDocumentContentProvider` purely from the configured provider's capability profile (design §5.1 — "only the strategy implementations know which profile is in play"); no caller names a profile type. This story owns the mechanism and a test proving a configuration swap changes the selected profile without a code change.
 - **Cache-priming stagger (recorded from S01-05 review):** an Anthropic prompt-cache entry becomes readable only after the response that writes it has begun, so a simultaneous seven-way fan-out all cache-misses and pays the write premium instead of collecting the discount. Realising the cache saving requires the topology to stagger: one call (triage is the natural candidate) primes the cache, the section fan-out follows. This is a scheduling decision this story (and Sprint 02's full fan-out) owns; the cost of ignoring it is measured money, not correctness.
 
 ---
