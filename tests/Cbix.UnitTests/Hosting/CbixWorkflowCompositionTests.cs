@@ -101,7 +101,7 @@ public sealed class CbixWorkflowCompositionTests : IDisposable
             [
                 typeof(DocumentIngestService),
                 typeof(DocumentIngestExecutor),
-                typeof(SectionExtractionStubExecutor),
+                typeof(DocControlExecutor),
                 typeof(PersistStubExecutor),
                 typeof(DuplicateTerminalExecutor),
                 typeof(ReviewQueueStubExecutor),
@@ -428,9 +428,15 @@ public sealed class CbixWorkflowCompositionTests : IDisposable
 
         services.AddCbixWorkflow(ingestOptions, presentation);
         services.AddCbixWorkflow(ingestOptions, presentation);
-        services.AddKeyedSingleton<AIAgent>(
-            CbixWorkflowNodes.Triage,
-            (_, _) => new ChatClientAgent(new CannedChatClient("triaged"), name: CbixWorkflowNodes.Triage));
+        // Both model-calling nodes, because story S01-16 put the DocControl agent in the section slot
+        // and Core resolves an agent factory per node. A composition that registered only triage would
+        // build a container that fails inside the first superstep of a real run rather than here.
+        foreach (string node in (string[])[CbixWorkflowNodes.Triage, CbixWorkflowNodes.SectionExtraction])
+        {
+            services.AddKeyedSingleton<AIAgent>(
+                node,
+                (_, key) => new ChatClientAgent(new CannedChatClient("triaged"), name: (string)key!));
+        }
 
         using ServiceProvider container = services.BuildServiceProvider(new ServiceProviderOptions
         {
@@ -574,9 +580,15 @@ public sealed class CbixWorkflowCompositionTests : IDisposable
         services.AddCbixWorkflow(
             new DocumentIngestOptions(CreateTemporaryDirectory(), DocumentIngestOptions.ClaudeFilesApiLimitBytes),
             new DocumentPresentationOptions(capability));
-        services.AddKeyedSingleton<AIAgent>(
-            CbixWorkflowNodes.Triage,
-            (_, _) => new ChatClientAgent(new CannedChatClient("triaged"), name: CbixWorkflowNodes.Triage));
+        // Both model-calling nodes, because story S01-16 put the DocControl agent in the section slot
+        // and Core resolves an agent factory per node. A composition that registered only triage would
+        // build a container that fails inside the first superstep of a real run rather than here.
+        foreach (string node in (string[])[CbixWorkflowNodes.Triage, CbixWorkflowNodes.SectionExtraction])
+        {
+            services.AddKeyedSingleton<AIAgent>(
+                node,
+                (_, key) => new ChatClientAgent(new CannedChatClient("triaged"), name: (string)key!));
+        }
 
         // Registered so a test can read the descriptors back and assert a declared lifetime rather
         // than only an observed one. The two differ: a transient registration resolved once inside one

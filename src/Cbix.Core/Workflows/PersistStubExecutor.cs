@@ -82,13 +82,13 @@ public sealed partial class PersistStubExecutor : Executor<SectionExtractionCand
         LogRunCompleted(
             _logger,
             message.Document.Document.Registered.DocumentId,
-            message.Sections.Count);
+            message.SectionCount);
 
         return ValueTask.FromResult(
             new ExtractionRunOutcome(
                 message.Document.Document.Submitted,
                 ExtractionRunDisposition.Persisted,
-                message.Sections.Count));
+                message.SectionCount));
     }
 
     /// <summary>Structured event marking a run that reached the persist step.</summary>

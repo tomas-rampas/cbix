@@ -18,7 +18,8 @@ public sealed class CapturingMessagesHandler : DelegatingHandler
     private const string DefaultAssistantText = "ok";
 
     private readonly bool _forwards;
-    private readonly string _assistantText = DefaultAssistantText;
+    private readonly string[] _assistantTexts = [DefaultAssistantText];
+    private readonly bool _repeatsItsLastAnswer = true;
 
     private int _requestCount;
 
@@ -46,7 +47,39 @@ public sealed class CapturingMessagesHandler : DelegatingHandler
     {
         ArgumentNullException.ThrowIfNull(assistantText);
 
-        _assistantText = assistantText;
+        _assistantTexts = [assistantText];
+    }
+
+    /// <summary>Initialises a handler that answers a sequence of calls, in order.</summary>
+    /// <param name="assistantTexts">
+    /// The replies, in the order the run will ask for them. For the Sprint 01 graph that is triage's
+    /// profile first and the DocControl section second.
+    /// </param>
+    /// <remarks>
+    /// <b>Added for story S01-16, and for the same reason the stub chat client grew one.</b> Once the
+    /// graph holds two agents whose replies are each parsed strictly against their own contract, one
+    /// canned answer cannot satisfy both - the triage profile handed to DocControl is refused, and the
+    /// run dies before the wire assertion has anything to look at. Answering by position keeps the fake
+    /// dumb: it reads nothing and cannot tell one agent from another.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="assistantTexts"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="assistantTexts"/> is empty or contains a null.</exception>
+    public CapturingMessagesHandler(params string[] assistantTexts)
+    {
+        ArgumentNullException.ThrowIfNull(assistantTexts);
+
+        if (assistantTexts.Length == 0)
+        {
+            throw new ArgumentException("A canned transport with no answers cannot stand in for the API.", nameof(assistantTexts));
+        }
+
+        if (Array.IndexOf(assistantTexts, null!) >= 0)
+        {
+            throw new ArgumentException("A canned answer must not be null.", nameof(assistantTexts));
+        }
+
+        _assistantTexts = [.. assistantTexts];
+        _repeatsItsLastAnswer = false;
     }
 
     /// <summary>Initialises a handler that records and then forwards to the real API.</summary>
@@ -84,7 +117,18 @@ public sealed class CapturingMessagesHandler : DelegatingHandler
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        Interlocked.Increment(ref _requestCount);
+        // The RETURN VALUE, not a re-read of the field. Two calls in flight could otherwise both read
+        // the post-increment count and answer with the same canned reply while reporting different
+        // ones - a race that today is theoretical (the Sprint 01 graph calls agents strictly in
+        // sequence) and stops being so the moment Sprint 02's seven-way fan-out lands. Taking the
+        // increment's own answer makes each call's position its own, whatever else is running.
+        int call = Interlocked.Increment(ref _requestCount);
+
+        // NOT thread-safe, and knowingly so: RequestUri, BetaHeader and Body are "the most recent
+        // request", which is a coherent idea only while requests are sequential. Under a parallel
+        // fan-out they become a race whose loser's request is simply lost, so a scenario asserting on
+        // them will need per-request capture (a list keyed by call number) before Sprint 02 widens the
+        // graph. Recorded here rather than discovered as a flaky assertion.
         RequestUri = request.RequestUri;
         BetaHeader = request.Headers.TryGetValues("anthropic-beta", out IEnumerable<string>? values)
             ? string.Join(",", values)
@@ -102,19 +146,37 @@ public sealed class CapturingMessagesHandler : DelegatingHandler
 
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(BuildResponse(), Encoding.UTF8, "application/json"),
+            Content = new StringContent(BuildResponse(call), Encoding.UTF8, "application/json"),
         };
     }
 
+    /// <summary>The reply for the call being answered, by position.</summary>
+    /// <remarks>
+    /// Running out throws rather than repeating: a scenario that describes two calls and gets three
+    /// has a pipeline doing something it did not describe - a retry, a duplicated node, a fan-out that
+    /// should not exist yet - and every one of those is worth failing on.
+    /// </remarks>
+    private string AnswerFor(int call)
+    {
+        if (call > _assistantTexts.Length && !_repeatsItsLastAnswer)
+        {
+            throw new InvalidOperationException(
+                $"The run asked for model reply {call}, but the scenario supplied {_assistantTexts.Length}.");
+        }
+
+        return _assistantTexts[Math.Min(call, _assistantTexts.Length) - 1];
+    }
+
     /// <summary>Builds a Messages API response in the shape the SDK deserialises.</summary>
-    private string BuildResponse() =>
+    /// <param name="call">This request's position, taken from its own increment.</param>
+    private string BuildResponse(int call) =>
         JsonSerializer.Serialize(new
         {
             id = "msg_bdd_canned",
             type = "message",
             role = "assistant",
             model = "claude-haiku-4-5-20251001",
-            content = new[] { new { type = "text", text = _assistantText } },
+            content = new[] { new { type = "text", text = AnswerFor(call) } },
             stop_reason = "end_turn",
             usage = new { input_tokens = 1, output_tokens = 1 },
         });

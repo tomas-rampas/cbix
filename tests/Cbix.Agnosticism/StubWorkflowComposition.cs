@@ -87,9 +87,18 @@ public static class StubWorkflowComposition
         // Singleton, matching the lifetime the host gives a real agent: an agent holds a client, not
         // per-document state. It also keeps the request count on the stub cumulative across the runs
         // in one scenario, which the duplicate-submission assertions read as a baseline and a delta.
-        services.AddKeyedSingleton<AIAgent>(
-            CbixWorkflowNodes.Triage,
-            (_, _) => new ChatClientAgent(chatClient, name: CbixWorkflowNodes.Triage));
+        //
+        // ONE AGENT PER MODEL-CALLING NODE, and the section slot joined the list with story S01-16.
+        // Both resolve to the same stub client on purpose: the agnosticism claim is about the
+        // pipeline running with no provider on the path, not about the fake being elaborate. What
+        // distinguishes the two calls is the ORDER the stub answers in, which is the scenario's to
+        // describe - see StubChatClient's sequenced constructor.
+        foreach (string node in (string[])[CbixWorkflowNodes.Triage, CbixWorkflowNodes.SectionExtraction])
+        {
+            services.AddKeyedSingleton<AIAgent>(
+                node,
+                (_, key) => new ChatClientAgent(chatClient, name: (string)key!));
+        }
 
         return services;
     }

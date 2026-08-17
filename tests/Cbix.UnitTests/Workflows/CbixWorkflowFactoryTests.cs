@@ -147,12 +147,17 @@ public sealed class CbixWorkflowFactoryTests
     }
 
     [Fact]
-    public void Build_MakesTriageTheOnlyModelCallingNodeToday()
+    public void Build_PinsExactlyWhichNodesCallAModel()
     {
         // Pins the premise the stagger test rests on. That test checks the model-calling nodes it is
         // told about, so a new agent node added without extending ModelCallingNodes would be checked
-        // by nothing at all. This fails when the set of executors holding an AIAgent changes, which is
-        // the moment someone must decide whether the new one belongs downstream of triage.
+        // by nothing at all. This fails when the set of executors that can reach a model changes,
+        // which is the moment someone must decide whether the new one belongs downstream of triage.
+        //
+        // It fired exactly as intended when story S01-16 put the DocControl agent in the section slot:
+        // the set went from one node to two, and extending it was a decision rather than a merge
+        // artefact. Sprint 02 adds the remaining six and the stagger test then has something to say
+        // about each of them.
         Workflow workflow = BuildWorkflow();
 
         List<string> agentNodes =
@@ -244,7 +249,7 @@ public sealed class CbixWorkflowFactoryTests
     {
         DocumentIngestExecutor ingest = CreateIngestExecutor();
         TriageExecutor triage = CreateTriageExecutor();
-        SectionExtractionStubExecutor section = new();
+        DocControlExecutor section = CreateDocControlExecutor();
         PersistStubExecutor persist = new(NullLogger<PersistStubExecutor>.Instance);
         DuplicateTerminalExecutor duplicate = new();
         ReviewQueueStubExecutor review = new(
@@ -268,11 +273,12 @@ public sealed class CbixWorkflowFactoryTests
     /// </summary>
     /// <remarks>
     /// Maintained by hand and cross-checked against the graph by
-    /// <see cref="Build_MakesTriageTheOnlyModelCallingNodeToday"/>, so it cannot silently fall behind
-    /// the executors that actually hold an agent. Sprint 02 adds the seven section agents here, and
-    /// the stagger test then has something to say about each of them.
+    /// <see cref="Build_PinsExactlyWhichNodesCallAModel"/>, so it cannot silently fall behind the
+    /// executors that actually reach a model. Story S01-16 added the section slot; Sprint 02 adds the
+    /// remaining six section agents, and the stagger test then has something to say about each.
     /// </remarks>
-    private static readonly string[] ModelCallingNodes = [CbixWorkflowNodes.Triage];
+    private static readonly string[] ModelCallingNodes =
+        [CbixWorkflowNodes.Triage, CbixWorkflowNodes.SectionExtraction];
 
     /// <summary>The executor ids an edge out of <paramref name="sourceId"/> leads to.</summary>
     private static IReadOnlyList<string> SinksOf(Workflow workflow, string sourceId) =>
@@ -323,7 +329,7 @@ public sealed class CbixWorkflowFactoryTests
     /// </para>
     /// <para>
     /// <b>An earlier version of this note claimed the consequence would have been a vacuous pass; that
-    /// was backwards.</b> <see cref="Build_MakesTriageTheOnlyModelCallingNodeToday"/> compares against
+    /// was backwards.</b> <see cref="Build_PinsExactlyWhichNodesCallAModel"/> compares against
     /// a NON-EMPTY expected set, so a detector that recognised nothing would have failed loudly, not
     /// silently - which is the arrangement working. What the widening bought is that it kept failing
     /// for the right reason: the detector answers "does this node cost a model call", and a node that
@@ -343,7 +349,7 @@ public sealed class CbixWorkflowFactoryTests
         new(
             CreateIngestExecutor(),
             CreateTriageExecutor(),
-            new SectionExtractionStubExecutor(),
+            CreateDocControlExecutor(),
             new PersistStubExecutor(NullLogger<PersistStubExecutor>.Instance),
             new DuplicateTerminalExecutor(),
             new ReviewQueueStubExecutor(
@@ -373,6 +379,21 @@ public sealed class CbixWorkflowFactoryTests
                 new PdfPigTextLayerExtractor(options, NullLogger<PdfPigTextLayerExtractor>.Instance),
                 NullLogger<DocumentIngestService>.Instance),
             NullLogger<DocumentIngestExecutor>.Instance);
+    }
+
+    /// <summary>A DocControl executor over an agent that refuses to run, like the triage one above.</summary>
+    private static DocControlExecutor CreateDocControlExecutor()
+    {
+        DocumentIngestOptions options = new(
+            Path.Combine(Path.GetTempPath(), "cbix-graph-shape"),
+            DocumentIngestOptions.ClaudeFilesApiLimitBytes);
+
+        return new DocControlExecutor(
+            new ChatContentDocumentAgentFactory(
+                new ChatClientAgent(new UnusedChatClient(), name: CbixWorkflowNodes.SectionExtraction)),
+            new TextOnlyDocumentContentProfile(
+                new PdfPigTextLayerExtractor(options, NullLogger<PdfPigTextLayerExtractor>.Instance)),
+            NullLogger<DocControlExecutor>.Instance);
     }
 
     private static TriageExecutor CreateTriageExecutor()

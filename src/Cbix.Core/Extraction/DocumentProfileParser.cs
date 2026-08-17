@@ -26,7 +26,7 @@ namespace Cbix.Core.Extraction;
 /// </para>
 /// <para>
 /// <b>Nothing model-written reaches a message unsanitised.</b> The only fragment a refusal needs is
-/// the name of an undeclared or repeated field, and it is rendered through <see cref="ForMessage"/> -
+/// the name of an undeclared or repeated field, and it is rendered through <see cref="ExtractionText.ForMessage"/> -
 /// the same replace-and-bound treatment the ingest boundary gives a submitted path, for the same
 /// reason: the message lands in a log, in a review-queue row and on an operator's terminal.
 /// </para>
@@ -71,8 +71,13 @@ public static class DocumentProfileParser
     /// 256 Ki is roughly three orders of magnitude above the largest legitimate profile (a few hundred
     /// bytes), so it is a bound against absurdity rather than a limit anything real approaches.
     /// </para>
+    /// <para>
+    /// <b>An alias of <see cref="ExtractionText.MaxReplyLength"/>, not a second copy of the number.</b>
+    /// It stays published here because callers and tests name it, but the value - and the reasoning
+    /// above - belong to the one place every parser at this boundary shares.
+    /// </para>
     /// </remarks>
-    public const int MaxReplyLength = 256 * 1024;
+    public const int MaxReplyLength = ExtractionText.MaxReplyLength;
 
     /// <summary>
     /// The longest value this parser will accept in any of the contract's string fields.
@@ -84,8 +89,12 @@ public static class DocumentProfileParser
     /// and far below anything that could be a paragraph, so a value past it is a model that pasted a
     /// page into a field rather than a document with an unusually long title. It also keeps every
     /// value comfortably inside the columns design 6 sizes for published text.
+    /// <para>
+    /// An alias of <see cref="ExtractionText.MaxFieldLength"/>, for the reason given above on
+    /// <see cref="MaxReplyLength"/>.
+    /// </para>
     /// </remarks>
-    public const int MaxFieldLength = 200;
+    public const int MaxFieldLength = ExtractionText.MaxFieldLength;
 
     /// <summary>The JSON reader's own settings: no comments, no trailing commas, no depth to speak of.</summary>
     /// <remarks>
@@ -179,7 +188,7 @@ public static class DocumentProfileParser
                     + "allocation first.");
         }
 
-        string payload = Unfence(reply.Trim());
+        string payload = ExtractionText.Unfence(reply.Trim());
 
         if (payload.Length == 0)
         {
@@ -216,36 +225,6 @@ public static class DocumentProfileParser
         }
 
         return document;
-    }
-
-    /// <summary>
-    /// Removes a Markdown code fence around an otherwise complete reply.
-    /// </summary>
-    /// <remarks>
-    /// Total and deterministic: the reply either opens with <c>```</c> and closes with <c>```</c>, in
-    /// which case the fence and its optional language tag are transport packaging, or it does not, in
-    /// which case nothing happens. It never scans for JSON embedded in surrounding text - that is a
-    /// search, and a search that succeeds on the wrong substring is worse than a refusal.
-    /// </remarks>
-    private static string Unfence(string trimmed)
-    {
-        const string Fence = "```";
-
-        if (!trimmed.StartsWith(Fence, StringComparison.Ordinal)
-            || !trimmed.EndsWith(Fence, StringComparison.Ordinal)
-            || trimmed.Length < Fence.Length * 2)
-        {
-            return trimmed;
-        }
-
-        // The opening fence may carry a language tag ("```json"), which runs to the end of its line.
-        int firstNewline = trimmed.IndexOf('\n', Fence.Length);
-        if (firstNewline < 0)
-        {
-            return trimmed;
-        }
-
-        return trimmed[(firstNewline + 1)..^Fence.Length].Trim();
     }
 
     /// <summary>
@@ -289,7 +268,7 @@ public static class DocumentProfileParser
                 throw new DocumentProfileFormatException(
                     DocumentProfileDefect.UndeclaredField,
                     $"The triage reply carries a field the DocumentProfile contract does not declare: "
-                        + $"'{ForMessage(property.Name)}'. The contract is "
+                        + $"'{ExtractionText.ForMessage(property.Name)}'. The contract is "
                         + $"({string.Join(", ", ContractFields)}); an unexpected field means the model answered "
                         + "a different question from the one that was asked, and dropping it silently would hide "
                         + "the drift until something needed the answer that was really meant.");
@@ -301,7 +280,7 @@ public static class DocumentProfileParser
                 // decide - and System.Text.Json's own last-one-wins would have decided it silently.
                 throw new DocumentProfileFormatException(
                     DocumentProfileDefect.DuplicateField,
-                    $"The triage reply gives '{ForMessage(property.Name)}' more than once. Which of two "
+                    $"The triage reply gives '{ExtractionText.ForMessage(property.Name)}' more than once. Which of two "
                         + "values is the answer is not a question a parser may decide, and taking either "
                         + "would publish a value on the strength of document order.");
             }
@@ -413,49 +392,4 @@ public static class DocumentProfileParser
         return confidence == 0d ? 0d : confidence;
     }
 
-    /// <summary>
-    /// Renders a model-supplied fragment safely inside a message.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The same reasoning as <c>PathBoundary.ForLog</c> applied to the other untrusted string class
-    /// this process handles. A model's reply is text from outside the estate: control characters and
-    /// line separators forge log lines, format characters (U+200E and friends) reorder rendered text,
-    /// and an unpaired surrogate can break the encoder in whichever sink receives it. The value is
-    /// replaced rather than dropped, because an operator needs to see that something was there.
-    /// </para>
-    /// <para>
-    /// Bounded before rendering, because a model that returned a megabyte of one character would
-    /// otherwise put it in a log line, a review-queue row and an operator's terminal.
-    /// </para>
-    /// </remarks>
-    private static string ForMessage(string value)
-    {
-        const int MaxRenderedLength = 80;
-        const string TruncationMarker = "...[truncated]";
-
-        ReadOnlySpan<char> kept = value.Length <= MaxRenderedLength
-            ? value
-            : value.AsSpan(0, MaxRenderedLength);
-
-        string sanitised = string.Create(kept.Length, value, static (destination, original) =>
-        {
-            for (int index = 0; index < destination.Length; index++)
-            {
-                char character = original[index];
-
-                destination[index] = char.IsControl(character)
-                    || char.GetUnicodeCategory(character)
-                        is UnicodeCategory.Format
-                        or UnicodeCategory.Surrogate
-                        or UnicodeCategory.LineSeparator
-                        or UnicodeCategory.ParagraphSeparator
-                    ? '�'
-                    : character;
-            }
-        });
-
-        // Appended after sanitisation, so nothing in the input can forge the marker.
-        return value.Length <= MaxRenderedLength ? sanitised : sanitised + TruncationMarker;
-    }
 }

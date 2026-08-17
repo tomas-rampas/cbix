@@ -108,7 +108,7 @@ public sealed class LlmAgnosticismProofSteps(LlmAgnosticismProofState state)
                     + "design Appendix A declares.");
         }
 
-        state.ChatClient = new StubChatClient(CannedTriageProfileJson);
+        state.ChatClient = new StubChatClient(CannedTriageProfileJson, CannedDeSpecimenReplies.DocControlSection());
     }
 
     [Given("the workflow is configured with the stub client instead of the Anthropic adapter")]
@@ -194,14 +194,18 @@ public sealed class LlmAgnosticismProofSteps(LlmAgnosticismProofState state)
             ],
             invoked);
 
-        // The model was actually consulted, exactly once. Without this the scenario would pass for a
-        // pipeline that had quietly stopped calling the agent at all - which would make the
-        // agnosticism claim trivially true and completely worthless.
-        Assert.Equal(1, ChatClient.RequestCount);
+        // The model was actually consulted - twice, once per agent in the graph. Without this the
+        // scenario would pass for a pipeline that had quietly stopped calling the agents at all, which
+        // would make the agnosticism claim trivially true and completely worthless. The number grew
+        // with story S01-16: a stub-driven run now reaches the real DocControl agent as well as triage,
+        // so the claim being proved is that BOTH model-calling nodes work with no provider on the path.
+        Assert.Equal(2, ChatClient.RequestCount);
 
-        // The structured payload survived the neutral path byte for byte. This is the property
-        // S01-14 will build its parsing on, and it is provider-independent by construction: nothing
-        // between the stub and here is allowed to know what a provider is.
+        // The structured payload survived the neutral path byte for byte, and the section agent's
+        // strict parse of ITS reply is the second, stronger form of the same claim: not merely that
+        // bytes crossed the neutral seam intact, but that a contract-conformant answer came back
+        // through it. Provider-independent by construction: nothing between the stub and here is
+        // allowed to know what a provider is.
         ExecutorCompletedEvent triaged = Assert.Single(
             state.Events.OfType<ExecutorCompletedEvent>(),
             completed => string.Equals(completed.ExecutorId, CbixWorkflowNodes.Triage, StringComparison.Ordinal));

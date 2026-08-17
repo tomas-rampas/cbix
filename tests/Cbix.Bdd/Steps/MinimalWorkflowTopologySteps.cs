@@ -53,6 +53,17 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
     private const string CannedTriageAnswer =
         """{"DocType":"Cross-Border Trading Legal Instruction","JurisdictionIso":"DE","DocRef":"CBTI-DE-2024","Version":"4.2","LayoutFamily":"contoso-country-manual-v4","Confidence":0.96}""";
 
+    /// <summary>
+    /// How many model calls one complete run makes.
+    /// </summary>
+    /// <remarks>
+    /// Two since story S01-16 put the DocControl agent in the section slot: triage, then the section
+    /// agent. Named rather than written as a literal at each call site, because the number is a
+    /// property of the topology this feature is about - Sprint 02's fan-out changes it to eight, and it
+    /// should change in one place when it does.
+    /// </remarks>
+    private const int ModelCallsPerRun = 2;
+
     [Given("the DE specimen submitted to the workflow")]
     public void GivenTheDeSpecimenSubmittedToTheWorkflow() => Compose();
 
@@ -78,7 +89,7 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
         // The arranging run was a complete run, so it triaged and it called the model. Both are
         // baselined rather than erased: the assertions that follow are about what the SECOND
         // submission did.
-        Assert.Equal(1, ChatClient.RequestCount);
+        Assert.Equal(ModelCallsPerRun, ChatClient.RequestCount);
 
         state.ModelCallsBeforeSubmission = ChatClient.RequestCount;
         state.Events.Clear();
@@ -130,7 +141,12 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
         // The model was actually consulted. Without this the step passes for a triage node that
         // fabricated a profile and never called anything - which is the failure the whole slot exists
         // to make impossible later.
-        Assert.Equal(1, ChatClient.RequestCount);
+        //
+        // The count is the RUN's, not triage's, because by the time this step runs the whole graph has
+        // executed: MAF's streaming run is drained before any Then step is reached. What it therefore
+        // pins is that the run made exactly the calls the topology describes - no retry, no second
+        // attempt, nothing calling a model twice.
+        Assert.Equal(ModelCallsPerRun, ChatClient.RequestCount);
     }
 
     [Then("a downstream stub executor receives the triage output")]
@@ -266,7 +282,7 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
     /// </remarks>
     private void Compose()
     {
-        StubChatClient chatClient = new(CannedTriageAnswer);
+        StubChatClient chatClient = new(CannedTriageAnswer, CannedDeSpecimenReplies.DocControlSection());
 
         ServiceCollection services = [];
         services.AddLogging();

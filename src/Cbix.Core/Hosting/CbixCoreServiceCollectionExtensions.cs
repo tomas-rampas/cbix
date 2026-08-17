@@ -191,17 +191,28 @@ public static class CbixCoreServiceCollectionExtensions
         // the same key first (Anthropic's must; see ChatContentDocumentAgentFactory's remarks), and
         // TryAdd is what makes "first registration wins" the rule rather than registration order being
         // a coin toss.
-        services.TryAddKeyedScoped<IDocumentBoundAgentFactory>(
-            CbixWorkflowNodes.Triage,
-            (provider, key) => new ChatContentDocumentAgentFactory(
-                provider.GetRequiredKeyedService<AIAgent>(key)));
+        //
+        // ONE PER MODEL-CALLING NODE, and the section slot joined the list with story S01-16. The loop
+        // is not tidiness: Sprint 02 adds six more section agents, and a per-node registration written
+        // out by hand is where the seventh gets forgotten - producing a container that resolves
+        // everything except one agent, and fails inside a superstep rather than at composition.
+        foreach (string node in (string[])[CbixWorkflowNodes.Triage, CbixWorkflowNodes.SectionExtraction])
+        {
+            services.TryAddKeyedScoped<IDocumentBoundAgentFactory>(
+                node,
+                (provider, key) => new ChatContentDocumentAgentFactory(
+                    provider.GetRequiredKeyedService<AIAgent>(key)));
+        }
 
         services.TryAddScoped<DocumentIngestExecutor>();
         services.TryAddScoped(provider => new TriageExecutor(
             provider.GetRequiredKeyedService<IDocumentBoundAgentFactory>(CbixWorkflowNodes.Triage),
             provider.GetRequiredService<IDocumentContentProvider>(),
             provider.GetRequiredService<ILogger<TriageExecutor>>()));
-        services.TryAddScoped<SectionExtractionStubExecutor>();
+        services.TryAddScoped(provider => new DocControlExecutor(
+            provider.GetRequiredKeyedService<IDocumentBoundAgentFactory>(CbixWorkflowNodes.SectionExtraction),
+            provider.GetRequiredService<IDocumentContentProvider>(),
+            provider.GetRequiredService<ILogger<DocControlExecutor>>()));
         services.TryAddScoped<PersistStubExecutor>();
         services.TryAddScoped<DuplicateTerminalExecutor>();
         services.TryAddScoped<ReviewQueueStubExecutor>();

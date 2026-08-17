@@ -158,10 +158,16 @@ public sealed class TriageRoutingSteps(TriageRoutingState state)
             services.AddSingleton(routing);
         }
 
+        // Two replies, in call order. Only the FIRST is this feature's subject - what triage said is
+        // what the routing edge acts on - but the control scenario deliberately lets a document through
+        // to extraction, and a section agent reached with no reply of its own would fail that run for a
+        // reason the feature is not about.
         services.AddStubBackedCbixWorkflow(
             RepositoryLayout.DataDirectory(),
-            new StubChatClient(state.CannedReply ?? throw new InvalidOperationException(
-                "No canned triage reply was chosen; a Given step must run before the When.")));
+            new StubChatClient(
+                state.CannedReply ?? throw new InvalidOperationException(
+                    "No canned triage reply was chosen; a Given step must run before the When."),
+                CannedDeSpecimenReplies.DocControlSection()));
 
         ServiceProvider container = services.BuildServiceProvider(new ServiceProviderOptions
         {

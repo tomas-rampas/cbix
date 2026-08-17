@@ -1,3 +1,5 @@
+using Cbix.Core.Extraction;
+
 namespace Cbix.Core.Workflows;
 
 /// <summary>
@@ -7,48 +9,58 @@ namespace Cbix.Core.Workflows;
 /// <remarks>
 /// <para>
 /// <b>Named a candidate, not a result, and the word is doing work.</b> Nothing on this type has been
-/// validated: no schema conformance, no grounding of snippets against the PDFPig text layer, no
-/// referential integrity, no completeness count. It is a proposal. Sprint 02's validator is the sole
-/// authority that turns one into something publishable, and calling this a result would be the first
-/// step towards someone persisting it.
+/// validated: no schema conformance beyond the parse, no grounding of snippets against the PDFPig
+/// text layer, no referential integrity, no completeness count. It is a proposal. Sprint 02's
+/// validator is the sole authority that turns one into something publishable, and calling this a
+/// result would be the first step towards someone persisting it.
 /// </para>
 /// <para>
-/// <b>What the sections field becomes.</b> S01-16 puts the real DocControl agent in the extractor
-/// slot and this carries its <c>DocControlSection</c>; Sprint 02 widens the slot to the seven-way
-/// fan-out and this becomes the fan-in aggregate. The list shape is chosen now for that reason - the
-/// aggregate is a list of section candidates, so the shape does not change when the count does.
+/// <b>One typed section today, and the shape says so honestly.</b> Story S01-16 puts the real
+/// DocControl agent in the extractor slot, so this carries its <see cref="DocControlSection"/> as a
+/// named property rather than as an entry in a collection of one. Sprint 02 widens the node into the
+/// seven-way fan-out and this becomes the fan-in aggregate - at which point the property becomes one
+/// of seven and <see cref="SectionCount"/> becomes a real count. A speculative collection invented
+/// here would be a list that is always length one, asserted about as if it could be anything else.
 /// </para>
 /// </remarks>
 public sealed class SectionExtractionCandidate
 {
     /// <summary>Initialises a new <see cref="SectionExtractionCandidate"/>.</summary>
     /// <param name="document">The triaged document these sections were extracted from.</param>
-    /// <param name="sections">
-    /// The section candidates, keyed by section name. Empty is legal and is what the S01-13 stub
-    /// produces: the topology story proves the slot is wired and reached, not that anything was
-    /// extracted through it.
-    /// </param>
+    /// <param name="docControl">The document-control block the DocControl agent proposed.</param>
     /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
-    public SectionExtractionCandidate(TriagedDocument document, IReadOnlyDictionary<string, string> sections)
+    public SectionExtractionCandidate(TriagedDocument document, DocControlSection docControl)
     {
         ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(sections);
+        ArgumentNullException.ThrowIfNull(docControl);
 
         Document = document;
-        Sections = sections;
+        DocControl = docControl;
     }
 
     /// <summary>Gets the triaged document these sections were extracted from.</summary>
     public TriagedDocument Document { get; }
 
+    /// <summary>Gets the document-control block the DocControl agent proposed (design 5.4).</summary>
+    public DocControlSection DocControl { get; }
+
     /// <summary>
-    /// Gets the raw section candidates, keyed by section name.
+    /// Gets how many section candidates this carries.
     /// </summary>
     /// <remarks>
-    /// Typed as strings for exactly as long as there is no typed section to carry: S01-16 lands
-    /// <c>DocControlSection</c> with its <c>ExtractedField&lt;T&gt;</c> provenance envelopes, and this
-    /// becomes a typed collection then. A speculative typed shape invented here would have to match
-    /// design 5.4 exactly to be worth anything, and matching it is that story's job.
+    /// <para>
+    /// One, by construction, for as long as the graph holds one section agent - a constant rather than
+    /// a computed length, because a collection that is always length one would be asserted about as if
+    /// it could be anything else. Sprint 02's fan-in makes it a real count.
+    /// </para>
+    /// <para>
+    /// <b>It carries no guarantee on its own, and an earlier note here implied otherwise.</b> A
+    /// constant cannot be zero, so the persist step reading it proves nothing by itself. What actually
+    /// guarantees a section reached persist is the pair of checks around it: this type's
+    /// <c>ThrowIfNull</c> on <see cref="DocControl"/>, so a candidate cannot exist without one, and the
+    /// executor refusing before it constructs one - so a run reporting the <c>Persisted</c> disposition
+    /// has, necessarily, a parsed section behind it. The number is a report, not the control.
+    /// </para>
     /// </remarks>
-    public IReadOnlyDictionary<string, string> Sections { get; }
+    public int SectionCount => 1;
 }

@@ -209,6 +209,17 @@ public static class CbixWorkerHostExtensions
                     // place for the tier to drift from the pin.
                     instructions: TriageInstructions));
 
+        // The first section agent (story S01-16). Design 5.4 puts DocControl on the Haiku tier, which
+        // is the configured default - so, as with triage, naming a model here would be a second place
+        // for the tier to drift. The Matrix agent is the one that will name Sonnet explicitly when
+        // Sprint 02 registers it, because it is the one the design tiers differently.
+        builder.Services.AddKeyedSingleton<IDocumentBoundAgentFactory>(
+            CbixWorkflowNodes.SectionExtraction,
+            (serviceProvider, _) => serviceProvider.GetRequiredService<AnthropicAgentFactory>()
+                .CreateDocumentAgentFactory(
+                    name: CbixWorkflowNodes.SectionExtraction,
+                    instructions: SectionExtractionInstructions));
+
         // Core's half: the ingest stack, the local document-content profiles and the workflow graph.
         // Everything above is what this call cannot decide for itself.
         builder.Services.AddCbixWorkflow(
@@ -425,6 +436,29 @@ public static class CbixWorkerHostExtensions
             + "Copy values verbatim. Use only the supplied document. Report page numbers as they are "
             + "shown in a PDF viewer. Never guess at a document you do not recognise: say so instead, "
             + "in the form the turn asks for.";
+
+    /// <summary>
+    /// A section agent's system instructions: design Appendix B's system prompt, verbatim in substance.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The uniform rules again, in the section agents' own words, because what a section agent must
+    /// never do differs in emphasis from what triage must never do: triage's hazard is guessing at a
+    /// document class, a section agent's is producing a value it did not read and a snippet it did not
+    /// copy. Design 5.6 makes verbatim containment the gate that catches the second, so the
+    /// instruction to copy exactly is stated as the load-bearing rule it is.
+    /// </para>
+    /// <para>
+    /// Shared across all seven agents deliberately: the per-section contract lives on the turn, which
+    /// is where <c>DocControlExecutor</c> puts it and where Sprint 02's six siblings will put theirs.
+    /// </para>
+    /// </remarks>
+    private const string SectionExtractionInstructions =
+        "You extract data from a cross-border trading legal instruction. Use ONLY the supplied "
+            + "document. Copy SourceSnippet values VERBATIM from the document text - the exact "
+            + "characters, never a tidied or re-punctuated version. Use logical page numbers as shown "
+            + "in a PDF viewer. If a field is absent, return null - never guess, and never take a value "
+            + "from anywhere but this document. Return JSON matching the requested schema exactly.";
 
     /// <summary>Reads the ingest gate's settings, defaulting the root under the content root.</summary>
     /// <remarks>

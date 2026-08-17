@@ -36,8 +36,9 @@ namespace Cbix.Core.Workflows;
 /// </para>
 /// <list type="bullet">
 ///   <item><description>
-///   <b>S01-16</b> replaces <see cref="SectionExtractionStubExecutor"/> with the real DocControl
-///   agent in the same slot.
+///   <b>S01-16</b> filled the <c>sectionExtraction</c> slot: <see cref="DocControlExecutor"/> replaced
+///   the stub that held it, with the node id, its position and its message types unchanged - which was
+///   the point of landing the slot before the agent that fills it.
 ///   </description></item>
 ///   <item><description>
 ///   <b>Sprint 02</b> widens <c>sectionExtraction</c> into the seven-way fan-out plus a fan-in
@@ -71,7 +72,7 @@ public sealed class CbixWorkflowFactory
 {
     private readonly DocumentIngestExecutor _ingest;
     private readonly TriageExecutor _triage;
-    private readonly SectionExtractionStubExecutor _sectionExtraction;
+    private readonly DocControlExecutor _sectionExtraction;
     private readonly PersistStubExecutor _persist;
     private readonly DuplicateTerminalExecutor _duplicateTerminal;
     private readonly ReviewQueueStubExecutor _review;
@@ -89,7 +90,7 @@ public sealed class CbixWorkflowFactory
     public CbixWorkflowFactory(
         DocumentIngestExecutor ingest,
         TriageExecutor triage,
-        SectionExtractionStubExecutor sectionExtraction,
+        DocControlExecutor sectionExtraction,
         PersistStubExecutor persist,
         DuplicateTerminalExecutor duplicateTerminal,
         ReviewQueueStubExecutor review,

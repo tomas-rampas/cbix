@@ -276,12 +276,18 @@ public sealed class TriageDocumentProfileSteps(TriageDocumentProfileState state)
         state.IsLive = live;
 
         CannedFilesApiHandler files = new();
+        // Two replies from story S01-16 onwards: the graph calls triage and then the DocControl agent,
+        // and each parses its own reply strictly against its own contract. This feature asserts on the
+        // FIRST request - triage's - but the run has to reach its end for the assertions about the
+        // parsed profile to have anything to read, so the section agent needs a reply it accepts.
         CapturingMessagesHandler messages = live
             ? new CapturingMessagesHandler(new HttpClientHandler())
-            : new CapturingMessagesHandler(CannedProfileJson(
-                specimenPath.Contains("_CH_", StringComparison.Ordinal) ? "CH" : "DE",
-                "CBTI-DE-2024",
-                "4.2"));
+            : new CapturingMessagesHandler(
+                CannedProfileJson(
+                    specimenPath.Contains("_CH_", StringComparison.Ordinal) ? "CH" : "DE",
+                    "CBTI-DE-2024",
+                    "4.2"),
+                CannedDeSpecimenReplies.DocControlSection());
 
         state.FilesApi = files;
         state.MessagesApi = messages;
@@ -313,15 +319,21 @@ public sealed class TriageDocumentProfileSteps(TriageDocumentProfileState state)
                     + "gives the triage node an agent bound to the run's document, so the model would be "
                     + "asked to identify a document it was never shown.");
 
-        object agentFactory = create.Invoke(factory, BuildAgentFactoryArguments(create))
-            ?? throw new InvalidOperationException("'CreateDocumentAgentFactory' returned null.");
-
         ServiceCollection services = [];
         services.AddLogging();
 
         // Registered BEFORE Core's composition, which is how the host does it: Core's own
         // registrations are TryAdd-shaped, so whatever a host contributes first is what the graph uses.
-        services.AddKeyedSingleton(seam, CbixWorkflowNodes.Triage, agentFactory);
+        // Both model-calling nodes, because the run has to complete for this feature's assertions about
+        // the parsed profile to have anything to read.
+        foreach (string node in (string[])[CbixWorkflowNodes.Triage, CbixWorkflowNodes.SectionExtraction])
+        {
+            object agentFactory = create.Invoke(factory, BuildAgentFactoryArguments(create, node))
+                ?? throw new InvalidOperationException("'CreateDocumentAgentFactory' returned null.");
+
+            services.AddKeyedSingleton(seam, node, agentFactory);
+        }
+
         services.AddSingleton<IDocumentContentProfileSource>(new ReflectedNativeDocumentSource(factory, factoryType));
 
         services.AddCbixWorkflow(
@@ -361,7 +373,7 @@ public sealed class TriageDocumentProfileSteps(TriageDocumentProfileState state)
     }
 
     /// <summary>Binds <c>CreateDocumentAgentFactory</c>'s arguments by name, so an added optional parameter survives.</summary>
-    private static object?[] BuildAgentFactoryArguments(MethodInfo method)
+    private static object?[] BuildAgentFactoryArguments(MethodInfo method, string node)
     {
         ParameterInfo[] parameters = method.GetParameters();
         object?[] arguments = new object?[parameters.Length];
@@ -371,7 +383,7 @@ public sealed class TriageDocumentProfileSteps(TriageDocumentProfileState state)
             ParameterInfo parameter = parameters[index];
             arguments[index] = parameter.Name switch
             {
-                "name" => CbixWorkflowNodes.Triage,
+                "name" => node,
                 "instructions" => "Extract, never interpret. Copy values verbatim. Use only the supplied document.",
                 _ when parameter.HasDefaultValue => parameter.DefaultValue,
                 _ => throw new InvalidOperationException(

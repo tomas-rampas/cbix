@@ -107,6 +107,23 @@ public static class CbixEventIds
     /// <summary>A run was routed to the review queue instead of into extraction (design 9).</summary>
     public const int WorkflowRunRoutedToReview = 1026;
 
+    /// <summary>A section agent is about to call the model (design 5.4).</summary>
+    public const int WorkflowSectionExtractionStarting = 1027;
+
+    /// <summary>A section agent produced a section candidate.</summary>
+    public const int WorkflowSectionExtracted = 1028;
+
+    /// <summary>
+    /// A section agent's reply did not match its section contract, so the run failed.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="WorkflowTriageReplyRefused"/> because the two end differently: a
+    /// refused triage reply routes the document to a human and the run ends as designed, while this
+    /// fails the run outright until Sprint 02's validator retry edge exists. An alert rule wants to
+    /// treat them differently, which it can only do if they are different ids.
+    /// </remarks>
+    public const int WorkflowSectionReplyRefused = 1029;
+
     // ---------------------------------------------------------------------------------------------
     // 1040-1059: host composition and startup.
     // ---------------------------------------------------------------------------------------------

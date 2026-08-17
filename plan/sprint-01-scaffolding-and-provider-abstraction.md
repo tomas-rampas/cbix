@@ -403,7 +403,7 @@ Done means: review-queue stub is sufficient for this story (a queue table row); 
 
 ---
 
-### [ ] S01-16 — DocControl agent extracts end-to-end from the DE specimen
+### [x] S01-16 — DocControl agent extracts end-to-end from the DE specimen
 
 As the pipeline
 I want the DocControl section agent to extract the document-control block from the DE specimen into a `DocControlSection`, with every scalar wrapped in the `ExtractedField<T>` provenance envelope
