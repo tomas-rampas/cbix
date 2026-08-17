@@ -1,9 +1,14 @@
 namespace Cbix.Worker;
 
 /// <summary>
-/// Placeholder background service. Later stories replace the loop body with the
-/// document-extraction workflow run.
+/// Placeholder background service.
 /// </summary>
+/// <remarks>
+/// S02-01 (or its Sprint-02 sibling) owns replacing this loop with the SQL-table work-queue drain
+/// driving <c>CbixWorkflowFactory</c> runs - recorded in <c>plan/sprint-02</c> and the roadmap
+/// coverage table. Naming the owner rather than "later stories" is the difference between a
+/// placeholder somebody is accountable for and one that survives by nobody noticing it.
+/// </remarks>
 /// <remarks>
 /// Internal on purpose: nothing outside this assembly constructs it (the host resolves
 /// it through <c>AddHostedService</c>), so it is not public API and owes no XML docs

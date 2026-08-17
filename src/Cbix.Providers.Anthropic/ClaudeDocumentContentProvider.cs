@@ -1,9 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 
 using Cbix.Core.Documents;
+using Cbix.Core.Extraction;
 using Cbix.Core.Ingest;
 
 using global::Anthropic;
@@ -444,7 +444,7 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
         Exception? innerException = null)
     {
         DocumentPreparationException failure = new(
-            $"The Claude document-content profile could not prepare document '{ForMessage(document.DocumentId)}' "
+            $"The Claude document-content profile could not prepare document '{ExtractionText.ForMessage(document.DocumentId)}' "
                 + $"('{document.FileName}'): {reason}",
             isTransient,
             innerException);
@@ -452,34 +452,6 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
         failure.Data[FailureKindKey] = failureKind;
 
         return failure;
-    }
-
-    /// <summary>Renders an identifier safely for a log line or a review-queue entry.</summary>
-    /// <remarks>
-    /// Substitution rather than rejection: this runs on a path that is already reporting a failure,
-    /// and throwing here would replace a diagnosable error with an undiagnosable one. The rules match
-    /// what <see cref="DocumentReference"/> enforces on a file name - control characters, Unicode
-    /// format characters and the line and paragraph separators that <c>char.IsControl</c> misses.
-    /// </remarks>
-    private static string ForMessage(string value)
-    {
-        Span<char> scrubbed = value.Length <= 256 ? stackalloc char[value.Length] : new char[256];
-        int length = Math.Min(value.Length, scrubbed.Length);
-
-        for (int index = 0; index < length; index++)
-        {
-            char character = value[index];
-
-            scrubbed[index] = char.IsControl(character)
-                || char.GetUnicodeCategory(character)
-                    is UnicodeCategory.Format
-                    or UnicodeCategory.LineSeparator
-                    or UnicodeCategory.ParagraphSeparator
-                ? '�'
-                : character;
-        }
-
-        return new string(scrubbed[..length]);
     }
 
     /// <summary>Opens the document's bytes for upload.</summary>
@@ -668,7 +640,7 @@ internal sealed class ClaudeDocumentContentProvider : IDocumentContentProvider, 
         {
             throw Fail(
                 document,
-                $"'{ForMessage(document.MediaType)}' is not a usable media type.",
+                $"'{ExtractionText.ForMessage(document.MediaType)}' is not a usable media type.",
                 isTransient: false,
                 RequestFailure,
                 error);

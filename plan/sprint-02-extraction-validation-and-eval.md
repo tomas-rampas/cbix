@@ -33,7 +33,11 @@ Feature: Fan-out to seven section agents
     And a single failing section agent does not block the other six from completing
 ```
 
-Done means: aggregate result shape carries all seven section outputs keyed by section name, ready for the normaliser (S02-09).
+Done means:
+- Aggregate result shape carries all seven section outputs keyed by section name, ready for the normaliser (S02-09).
+- **Agnosticism-gate root set (inherited, Sprint 01 final review):** the LLM-agnosticism gate's reachability walk hand-keeps a resolved-concretes root list (`tests/Cbix.Bdd/Support/WorkflowRunDependencyGraph.cs`). The six new keyed section agents must each join it — or, better, the set must be derived by enumerating keyed `AIAgent`/factory registrations off the service collection, which that comment names as the correct fix. A missing root only shrinks the walk, which is exactly how the permanent gate rots silently.
+- **Cache-priming stagger (inherited from S01-13's Done means):** the section fan-out must be a successor of `triage`, never a peer of it — a peer fan-out all cache-misses and pays the write premium; the run would be correct and the bill wrong. The graph-shape test pinning every model-calling node as a descendant of triage must stay green with the widened set.
+- **Worker intake loop (Sprint 01 final review):** nothing outside the test harness runs the workflow — `Cbix.Worker`'s `Worker.cs` is still the S01-01 placeholder heartbeat, and design §5.2's SQL-table work queue has no owner. This story (or a sibling added at Sprint 02 planning) must give the worker a real intake: drain the SQL-table queue (or an interim file-drop poll explicitly recorded as such) and drive `CbixWorkflowFactory` runs. The roadmap coverage row for §5.2's work queue has been corrected from "Sprint 01 (implicit)" to this deferral.
 
 ---
 
@@ -303,7 +307,10 @@ Feature: Validator grounding gate
     And the ValidationReport includes "snippet not found on page <N>" for that field
 ```
 
-Done means: M0 exit criterion requires this gate at 100% "by construction" — the gate itself must have zero false negatives against the golden set's known-correct snippets (verified by S02-24).
+Done means:
+- M0 exit criterion requires this gate at 100% "by construction" — the gate itself must have zero false negatives against the golden set's known-correct snippets (verified by S02-24).
+- **Scope decision (recorded at Sprint 01 close):** the gate checks snippet-appears-verbatim-on-its-page ONLY — it does NOT check snippet-contains-value. A document printing "16 August 2026" with the model returning `Value: "2026-08-16"` is a legitimate normalised extraction whose snippet grounds correctly; enforcing containment of the value in the snippet would false-refuse it. If value-in-snippet checking is ever wanted, it needs its own story with a normalisation-aware comparison — do not fold it into this gate. (The extraction prompts instruct the model that the snippet must contain the value; that is prompt guidance, not a validator contract.)
+- **Rendering rule (inherited):** stored snippets stay raw (ordinal containment needs verbatim bytes); every RENDERING of a snippet into `ValidationReport` text, review-queue rows, logs, or an operator's terminal goes through `ExtractionText.ForMessage` — the split is documented at the S01-16 grounding assertion, which this validator supersedes.
 
 ---
 

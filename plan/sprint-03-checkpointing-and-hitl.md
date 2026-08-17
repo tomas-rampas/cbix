@@ -65,7 +65,9 @@ Feature: Resume after crash
     And none of the seven section agents are invoked again
 ```
 
-Done means: verified by asserting agent-call counts before and after the simulated crash, not just that the run eventually completes.
+Done means:
+- Verified by asserting agent-call counts before and after the simulated crash, not just that the run eventually completes.
+- **Dead-file_id invalidation (inherited, Sprint 01 final review):** a resumed run holding a checkpointed `DocumentContentHandle` whose `ProviderToken` (Files API `file_id`) has been invalidated provider-side (key rotation, retention expiry, deletion) rebuilds the same dead block forever — the checkpoint is unresumable and the loop does not exit on its own (`ClaudeDocumentContentProvider`'s remarks record this honestly). This story owns the invalidation entry point: a downstream 404-on-use must discard the stale token from the checkpoint and the run-scope memo so the next preparation uploads afresh.
 
 ---
 

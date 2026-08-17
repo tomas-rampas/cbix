@@ -57,12 +57,16 @@ Feature: DocControl agent end-to-end
     And no review-queue row is written for the section failure
 
   @wire
-  Scenario: The DocControl request carries the prepared document and its cache opt-in
+  Scenario: The DocControl request carries the prepared document, and the whole slice completes
     Given the DE specimen prepared for a Claude-backed DocControl run
     When the DocControl agent runs
     Then the outbound DocControl request carries the document block referencing the uploaded "file_id"
     And the outbound DocControl request carries the "files-api-2025-04-14" beta
     And the outbound DocControl request carries the "extended-cache-ttl-2025-04-11" beta
+    And it returns a DocControlSection with a non-null DocRef and Version
+    And every scalar field is wrapped in ExtractedField<T> with SourcePage and SourceSnippet populated
+    And every SourceSnippet appears verbatim on its reported SourcePage of the PDFPig text layer
+    And the run completes with one section extracted
 
   @requiresApi
   Scenario: The live pipeline extracts the DocControl block from the DE specimen

@@ -214,15 +214,44 @@ public sealed class AnthropicAgentFactory : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(instructions);
 
-        string model = ResolveModel(modelId);
-        int tokens = ResolveMaxOutputTokens(maxOutputTokens);
+        return CreateBetaAgent(name, instructions, ResolveModel(modelId), ResolveMaxOutputTokens(maxOutputTokens));
+    }
 
-        return _client.Beta.AsAIAgent(
+    /// <summary>
+    /// Builds an agent on the beta Messages route, which is the route EVERY CBIX agent uses.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The decision this method exists to name.</b> <c>_client.Beta.AsAIAgent</c> sends to
+    /// <c>/v1/messages?beta=true</c>, and it is used for every agent this factory builds - including
+    /// the ones that carry no document and need no beta feature at all. That was previously an
+    /// unstated consequence of two call sites happening to say <c>.Beta</c>; it is stated here because
+    /// it is a real choice with a real cost, and because a reader looking for it found nothing.
+    /// </para>
+    /// <para>
+    /// <b>Why one route rather than two.</b> The document-carrying agents genuinely require it: a
+    /// document block referencing an uploaded file needs <c>files-api-2025-04-14</c>, and the block's
+    /// 1h <c>cache_control</c> TTL is declared alongside <c>extended-cache-ttl-2025-04-11</c>. Routing
+    /// only those agents through the beta endpoint and the rest through the stable one would mean two
+    /// request shapes, two sets of behaviour to verify on every SDK bump, and - the part that decides
+    /// it - two different prompt prefixes for the same document, which is precisely how a prompt cache
+    /// stops being hit. One route keeps the cached prefix identical across the whole fan-out.
+    /// </para>
+    /// <para>
+    /// <b>The cost, stated rather than glossed.</b> A beta endpoint carries weaker stability promises
+    /// than the stable one, so an agent that needs nothing beta is exposed to churn it did not ask
+    /// for. That is accepted for the reason design 11 already accepts for the integration itself -
+    /// the whole Anthropic surface here is prerelease and pinned exactly - and it is re-checkable: the
+    /// wire scenarios assert the resolved endpoint and path on every run, so a route change is a
+    /// failing test rather than a discovery.
+    /// </para>
+    /// </remarks>
+    private AIAgent CreateBetaAgent(string name, string instructions, string model, int maxOutputTokens) =>
+        _client.Beta.AsAIAgent(
             model: model,
             instructions: instructions,
             name: name,
-            defaultMaxTokens: tokens);
-    }
+            defaultMaxTokens: maxOutputTokens);
 
     /// <summary>
     /// Creates an agent bound to one prepared document, together with the run options that actually
@@ -305,11 +334,7 @@ public sealed class AnthropicAgentFactory : IDisposable
 
         IReadOnlyList<BetaContentBlockParam> blocks = ClaudeDocumentAttachment.DescribeBlocks(document);
 
-        AIAgent agent = _client.Beta.AsAIAgent(
-            model: model,
-            instructions: instructions,
-            name: name,
-            defaultMaxTokens: tokens);
+        AIAgent agent = CreateBetaAgent(name, instructions, model, tokens);
 
         // One resolved model and one resolved cap reach both halves, captured in the closure below.
         // The binding invokes it on every call, so there is no options object anyone can mis-pair or

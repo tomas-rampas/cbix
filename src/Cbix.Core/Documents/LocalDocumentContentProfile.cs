@@ -186,7 +186,7 @@ public abstract class LocalDocumentContentProfile : IDocumentContentProvider
         // here, because both of its silent outcomes are corruption: content prepared from one
         // document returned under another's identity, and every value extracted from it recorded
         // against the wrong source.
-        resumeFrom?.IsRedeemableBy(document, Capabilities.ProfileName);
+        _ = resumeFrom?.IsRedeemableBy(document, Capabilities.ProfileName);
 
         Lazy<Task<DocumentContent>> preparation = GetOrStartPreparation(document);
 

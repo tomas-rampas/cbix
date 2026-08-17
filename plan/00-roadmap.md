@@ -98,7 +98,7 @@ Every §5 component of the design is covered by at least one story across Sprint
 | §5.1 `IDocumentContentProvider` (Claude / generic-vision / text-only profiles) | Sprint 01 |
 | §5.2 Workflow topology, hosting | Sprint 01 (minimal), Sprint 02 (full fan-out/fan-in) |
 | §5.2 Checkpoint storage (SQL Server) | Sprint 03 |
-| §5.2 Work queue (SQL-table, PoC) | Sprint 01 (implicit in worker scaffolding); Kafka/RabbitMQ migration deferred to M2 |
+| §5.2 Work queue (SQL-table, PoC) | **Deferred to Sprint 02** (corrected at Sprint 01 close: no Sprint 01 story delivered a queue or a worker intake loop — the composition and startup probes shipped, but `Worker.cs` remains a placeholder; ownership recorded on S02-01's Done means). Kafka/RabbitMQ migration deferred to M2 |
 | §5.3 Triage agent | Sprint 01 |
 | §5.4 Section extraction agents (all seven) | Sprint 01 (DocControl), Sprint 02 (remaining six incl. Matrix) |
 | §5.4 Matrix agent escalation path | Sprint 02 |

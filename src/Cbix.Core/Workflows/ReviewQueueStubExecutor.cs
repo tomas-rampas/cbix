@@ -79,7 +79,15 @@ public sealed partial class ReviewQueueStubExecutor : Executor<TriagedDocument, 
             message.Document.Registered.DocumentId,
             reason,
             detail,
-            message.AgentName,
+
+            // Truncated here, exactly as the detail is, and for the reason the entry's own bound
+            // exists: ReviewQueueEntry THROWS above its width, so passing an over-long agent name
+            // straight through would fail the run on the document that most needed a human - the very
+            // outcome the app-side bound was added to prevent, arriving through the one field that was
+            // left unbounded at the call site. An agent name is a graph node id today, so this can only
+            // fire if a host registers an absurd one; that is precisely when it must not take the
+            // document down with it.
+            Truncate(message.AgentName, ReviewQueueEntry.MaxAgentNameLength),
             message.Profile?.Confidence,
             _timeProvider.GetUtcNow());
 
@@ -115,7 +123,7 @@ public sealed partial class ReviewQueueStubExecutor : Executor<TriagedDocument, 
                     $"Triage reported confidence {profile.Confidence} for this document, below the "
                         + $"configured routing threshold, so it was not extracted. Confirm what the "
                         + $"document is and, if the layout is a new family, add few-shot examples for "
-                        + $"it.")));
+                        + $"it."), ReviewQueueEntry.MaxDetailLength));
         }
 
         // Written by the parser, which sanitises anything model-supplied before it appears - see
@@ -126,22 +134,23 @@ public sealed partial class ReviewQueueStubExecutor : Executor<TriagedDocument, 
             Truncate(
                 "Triage's agent replied with something that is not a DocumentProfile, so nothing about "
                     + "this document was established. "
-                    + (message.ProfileParseFailure ?? "No reason was recorded.")));
+                    + (message.ProfileParseFailure ?? "No reason was recorded."),
+                ReviewQueueEntry.MaxDetailLength));
     }
 
-    /// <summary>Bounds a description to what the queue's detail column holds.</summary>
+    /// <summary>Bounds a value to the width of the column it is destined for.</summary>
     /// <remarks>
     /// Deliberate and visible: the marker is appended after truncation so a reviewer can tell a
     /// shortened description from a terse one, and so nothing in the truncated text can forge the
     /// marker.
     /// </remarks>
-    private static string Truncate(string detail)
+    private static string Truncate(string value, int maxLength)
     {
         const string Marker = "...[truncated]";
 
-        return detail.Length <= ReviewQueueEntry.MaxDetailLength
-            ? detail
-            : detail[..(ReviewQueueEntry.MaxDetailLength - Marker.Length)] + Marker;
+        return value.Length <= maxLength
+            ? value
+            : value[..(maxLength - Marker.Length)] + Marker;
     }
 
     /// <summary>Structured event for a run that ended in the review queue.</summary>
