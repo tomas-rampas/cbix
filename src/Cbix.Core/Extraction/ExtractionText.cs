@@ -13,12 +13,36 @@ namespace Cbix.Core.Extraction;
 /// sanitiser is how one of them gets a subtly different category list.
 /// </para>
 /// <para>
-/// <b>It is the only copy, and that took a correction to become true.</b> S01-16 introduced this type
-/// with a sharing claim in its remarks while <see cref="DocumentProfileParser"/> kept byte-identical
-/// private copies of the sanitiser, the fence normalisation and both bounds - so the codebase briefly
-/// held THREE sanitisers and a comment asserting one. Both parsers now delegate here, and
-/// <c>DocumentProfileParser</c>'s public constants are aliases of these, so its published surface is
-/// unchanged and there is exactly one body to get right.
+/// <b>It is the only copy, and that took two corrections to become true.</b> S01-16 introduced this
+/// type with a sharing claim in its remarks while <see cref="DocumentProfileParser"/> kept
+/// byte-identical private copies of the sanitiser, the fence normalisation and both bounds. Removing
+/// those left two more: the Claude document-content profile had a copy that had already drifted (it
+/// omitted <c>UnicodeCategory.Surrogate</c> and truncated with no marker), and the worker host had one
+/// differing only in its bound. All four are gone. The bound is now a parameter, which is what the
+/// last of them actually needed, and <c>DocumentProfileParser</c>'s public constants are aliases of
+/// these - so every published surface is unchanged and there is exactly one body to get right.
+/// </para>
+/// <para>
+/// The claim is checkable rather than asserted. A search for <c>char.GetUnicodeCategory</c> across
+/// <c>src/</c> finds exactly three sites, and only one of them is a renderer:
+/// </para>
+/// <list type="bullet">
+///   <item><description>
+///   this method - the one renderer of untrusted text;
+///   </description></item>
+///   <item><description>
+///   <c>PathBoundary.ForLog</c>, which renders OS paths at the ingest boundary and carries a
+///   path-length truncation this has no use for - a deliberate second renderer for a different string
+///   class, kept in step by the note on each;
+///   </description></item>
+///   <item><description>
+///   <c>DocumentReference</c>'s file-name check, which is not a renderer at all: it REFUSES a name
+///   carrying those categories rather than scrubbing it for display, so nothing hostile ever reaches
+///   the sanitisers from that path.
+///   </description></item>
+/// </list>
+/// <para>
+/// A fourth hit is a new copy.
 /// </para>
 /// <para>
 /// <b>Public, deliberately.</b> Everything that RENDERS model-supplied text must use the same
@@ -156,15 +180,28 @@ public static class ExtractionText
     /// </para>
     /// </remarks>
     /// <param name="value">The model-supplied fragment.</param>
+    /// <param name="maxRenderedLength">
+    /// How much of <paramref name="value"/> to keep before truncating, defaulting to 80.
+    /// <para>
+    /// <b>A parameter rather than a second copy of this method.</b> The host renders configuration
+    /// values - which arrive from an environment variable, a Helm chart or a mounted config map, and
+    /// are untrusted in the same way for the same reasons - and wants a longer bound because an
+    /// operator reading "which value did I mis-set" needs more of it than a reader diagnosing a model
+    /// reply does. That difference was previously expressed as a duplicated body differing in one
+    /// integer, which is exactly the drift this type exists to prevent.
+    /// </para>
+    /// </param>
     /// <returns>A rendering safe to place in a message, a log line or a stored row.</returns>
-    public static string ForMessage(string value)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxRenderedLength"/> is not positive.</exception>
+    public static string ForMessage(string value, int maxRenderedLength = 80)
     {
-        const int MaxRenderedLength = 80;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRenderedLength);
+
         const string TruncationMarker = "...[truncated]";
 
-        ReadOnlySpan<char> kept = value.Length <= MaxRenderedLength
+        ReadOnlySpan<char> kept = value.Length <= maxRenderedLength
             ? value
-            : value.AsSpan(0, MaxRenderedLength);
+            : value.AsSpan(0, maxRenderedLength);
 
         string sanitised = string.Create(kept.Length, value, static (destination, original) =>
         {
@@ -184,6 +221,6 @@ public static class ExtractionText
         });
 
         // Appended after sanitisation, so nothing in the input can forge the marker.
-        return value.Length <= MaxRenderedLength ? sanitised : sanitised + TruncationMarker;
+        return value.Length <= maxRenderedLength ? sanitised : sanitised + TruncationMarker;
     }
 }

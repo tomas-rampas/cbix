@@ -140,9 +140,24 @@ public sealed partial class ReviewQueueStubExecutor : Executor<TriagedDocument, 
 
     /// <summary>Bounds a value to the width of the column it is destined for.</summary>
     /// <remarks>
+    /// <para>
     /// Deliberate and visible: the marker is appended after truncation so a reviewer can tell a
-    /// shortened description from a terse one, and so nothing in the truncated text can forge the
-    /// marker.
+    /// shortened description from a terse one.
+    /// </para>
+    /// <para>
+    /// <b>What the marker proves, exactly.</b> Nothing in the TRUNCATED text can forge it, because it
+    /// is appended after the cut. It does not prove the converse: a value that arrived under the bound
+    /// and happens to end in those characters is indistinguishable from a truncated one. That is
+    /// accepted - the marker is a reading aid for a human working the queue, not an integrity claim,
+    /// and the values reaching it are written by CBIX rather than by a model.
+    /// </para>
+    /// <para>
+    /// <b>The <see cref="Math.Max(int, int)"/> is not defensive noise.</b> Without it, a column
+    /// narrowed below the marker's own length would make the slice bound negative and throw - turning a
+    /// bound whose whole purpose is to keep the review path alive into a crash on that path, at the
+    /// moment a document most needs a human. The clamp degrades to "marker only", which is ugly and
+    /// survivable; the schema-parity test is what catches the narrowing itself.
+    /// </para>
     /// </remarks>
     private static string Truncate(string value, int maxLength)
     {
@@ -150,7 +165,7 @@ public sealed partial class ReviewQueueStubExecutor : Executor<TriagedDocument, 
 
         return value.Length <= maxLength
             ? value
-            : value[..(maxLength - Marker.Length)] + Marker;
+            : value[..Math.Max(0, maxLength - Marker.Length)] + Marker;
     }
 
     /// <summary>Structured event for a run that ended in the review queue.</summary>

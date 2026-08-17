@@ -3,6 +3,7 @@ using System.Globalization;
 using Cbix.Core.Agents;
 using Cbix.Core.Diagnostics;
 using Cbix.Core.Documents;
+using Cbix.Core.Extraction;
 using Cbix.Core.Hosting;
 using Cbix.Core.Ingest;
 using Cbix.Core.Secrets;
@@ -582,44 +583,31 @@ public static class CbixWorkerHostExtensions
     /// forge log lines and reorder rendered text.
     /// </para>
     /// <para>
-    /// <b>Duplicated here rather than exposed from Core.</b> <c>PathBoundary</c> is internal to
-    /// <c>Cbix.Core</c> and its <c>ForLog</c> carries a path-length truncation this has no use for.
-    /// Widening Core's public surface to share eight lines would trade a real API commitment for a
-    /// small saving; the two are kept in step by the comment on each rather than by a shared type.
-    /// The category list is the same one <c>PathBoundary.IsUnsafeToRender</c> uses.
+    /// <b>Delegated rather than duplicated, and the note that used to sit here was stale.</b> It
+    /// argued that <c>PathBoundary</c> is internal to <c>Cbix.Core</c> and that widening Core's public
+    /// surface to share eight lines was not worth it - true when written, and overtaken:
+    /// <see cref="ExtractionText"/> is public precisely so that every renderer of untrusted text uses
+    /// one body. This method had already become the third copy, differing from that body in exactly
+    /// one integer, which is how a scrub set drifts.
+    /// </para>
+    /// <para>
+    /// <b>The bound stays 200 here.</b> An operator reading "which value did I mis-set" needs more of
+    /// the value than a reader diagnosing a model reply does, so the difference is real - it is now a
+    /// parameter rather than a reason to keep a second implementation.
     /// </para>
     /// </remarks>
-    private static string ForMessage(string configured)
-    {
-        // Bounded before rendering: a multi-megabyte environment variable in an exception message is a
-        // denial of service against whoever has to read it.
-        const int MaxRenderedLength = 200;
-        const string TruncationMarker = "...[truncated]";
+    private static string ForMessage(string configured) =>
+        ExtractionText.ForMessage(configured, MaxRenderedConfigurationLength);
 
-        ReadOnlySpan<char> kept = configured.Length <= MaxRenderedLength
-            ? configured
-            : configured.AsSpan(0, MaxRenderedLength);
-
-        string sanitised = string.Create(kept.Length, configured, static (destination, original) =>
-        {
-            for (int index = 0; index < destination.Length; index++)
-            {
-                char character = original[index];
-
-                destination[index] = char.IsControl(character)
-                    || char.GetUnicodeCategory(character)
-                        is UnicodeCategory.Format
-                        or UnicodeCategory.Surrogate
-                        or UnicodeCategory.LineSeparator
-                        or UnicodeCategory.ParagraphSeparator
-                    ? '�'
-                    : character;
-            }
-        });
-
-        // Appended after sanitisation, so nothing in the input can forge the marker.
-        return configured.Length <= MaxRenderedLength ? sanitised : sanitised + TruncationMarker;
-    }
+    /// <summary>
+    /// How much of an operator-supplied configuration value an exception message keeps.
+    /// </summary>
+    /// <remarks>
+    /// Bounded at all because a multi-megabyte environment variable in an exception message is a
+    /// denial of service against whoever has to read it; bounded generously because the reader is
+    /// trying to recognise a value they set.
+    /// </remarks>
+    private const int MaxRenderedConfigurationLength = 200;
 
     private static long ParseMaxDocumentBytes(string configured) =>
         long.TryParse(configured, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed)

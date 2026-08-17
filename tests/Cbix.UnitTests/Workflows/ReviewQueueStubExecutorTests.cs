@@ -78,6 +78,29 @@ public sealed class ReviewQueueStubExecutorTests
     }
 
     [Fact]
+    public async Task HandleAsync_BoundsTheAgentNameToWhatTheColumnHolds()
+    {
+        // The sibling of the detail-bound test, and it guards the failure that made it necessary:
+        // ReviewQueueEntry THROWS above its width, so an over-long agent name passed straight through
+        // would fail the run on the document that most needed a human - the exact outcome the app-side
+        // bound was added to prevent, arriving through the one field left unbounded at the call site.
+        //
+        // The assertion is therefore as much about what does NOT happen as about the truncation: the
+        // call completes, a row lands, and the run carries on.
+        InMemoryReviewQueue queue = new();
+
+        ExtractionRunOutcome outcome = await Execute(
+            queue,
+            Profiled(0.2d, agentName: new string('a', 4000)));
+
+        ReviewQueueEntry row = Assert.Single(queue.Entries);
+
+        Assert.True(row.AgentName.Length <= ReviewQueueEntry.MaxAgentNameLength);
+        Assert.EndsWith("...[truncated]", row.AgentName, StringComparison.Ordinal);
+        Assert.Equal(ExtractionRunDisposition.ReviewQueued, outcome.Disposition);
+    }
+
+    [Fact]
     public async Task HandleAsync_RecordsTheDocumentsRegistryIdentity()
     {
         // The content hash, which is what every other table joins on and the one document identifier
@@ -149,10 +172,10 @@ public sealed class ReviewQueueStubExecutorTests
         return await executor.HandleAsync(message, null!);
     }
 
-    private static TriagedDocument Profiled(double confidence) =>
+    private static TriagedDocument Profiled(double confidence, string? agentName = null) =>
         new(
             Ingested(),
-            CbixWorkflowNodes.Triage,
+            agentName ?? CbixWorkflowNodes.Triage,
             "{}",
             new DocumentProfile("UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", confidence),
             profileParseFailure: null);
