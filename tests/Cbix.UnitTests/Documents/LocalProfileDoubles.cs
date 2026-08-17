@@ -28,23 +28,62 @@ public sealed class StubTextLayerExtractor(params string[] pages) : ITextLayerEx
     /// <summary>Gets or sets a factory for the exception to throw instead of returning a text layer.</summary>
     public Func<Exception>? Failure { get; set; }
 
-    /// <summary>Gets or sets work to run inside the call, used to widen the window a concurrency test races in.</summary>
-    public Action? OnCall { get; set; }
+    /// <summary>
+    /// Gets or sets work to await inside the call, used to hold a preparation open while a test
+    /// observes what other callers do.
+    /// </summary>
+    /// <remarks>
+    /// <b>Asynchronous, not a blocking wait, and that is not a style preference.</b> The profile now
+    /// runs preparations on the thread pool, so a double that blocked its thread would hold a pool
+    /// thread for the whole gate. With several such tests running in parallel - xUnit runs classes
+    /// concurrently, and every one of these contract tests is inherited by two profiles - that
+    /// starves the pool and the suite stalls until the pool's one-thread-per-second injection
+    /// catches up. Measured: converting these gates from ManualResetEventSlim to awaited tasks is
+    /// what stopped the suite hanging.
+    /// </remarks>
+    public Func<CancellationToken, Task>? Block { get; set; }
+
+    /// <summary>
+    /// Waits until the most recent call has returned or thrown.
+    /// </summary>
+    /// <remarks>
+    /// Lets a test assert on what happens AFTER a preparation fails without sleeping for an
+    /// arbitrary interval. The eviction under test is attached to the task rather than to any
+    /// caller, so there is otherwise no caller-side moment at which it is known to have run.
+    /// </remarks>
+    public Task WaitForCallToFinishAsync() => Volatile.Read(ref _finished).Task;
+
+    private TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <inheritdoc />
-    public Task<TextLayer> ExtractAsync(DocumentReference document, CancellationToken cancellationToken = default)
+    public async Task<TextLayer> ExtractAsync(DocumentReference document, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         Interlocked.Increment(ref _callCount);
-        OnCall?.Invoke();
+        TaskCompletionSource finished = Volatile.Read(ref _finished);
 
-        if (Failure is not null)
+        try
         {
-            throw Failure();
-        }
+            if (Block is not null)
+            {
+                await Block(cancellationToken).ConfigureAwait(false);
+            }
 
-        return Task.FromResult(new TextLayer(document.DocumentId, _pages));
+            if (Failure is not null)
+            {
+                throw Failure();
+            }
+
+            return new TextLayer(document.DocumentId, _pages);
+        }
+        finally
+        {
+            // Signalled on both paths, and the source is swapped first so a later call can be
+            // awaited independently of this one.
+            Volatile.Write(ref _finished, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            finished.TrySetResult();
+        }
     }
 }
 
@@ -72,14 +111,34 @@ public sealed class StubPageImageRenderer(Func<int> pageCount) : IPageImageRende
     /// <summary>Gets or sets a factory for the exception to throw instead of returning images.</summary>
     public Func<Exception>? Failure { get; set; }
 
+    /// <summary>
+    /// Gets or sets work to await before returning, used to hold a render open while a test observes
+    /// the deadline or a cancellation.
+    /// </summary>
+    /// <remarks>
+    /// Takes the token it was given so this double behaves as a well-written renderer does: the
+    /// production renderer checks between pages, and a stub that ignored the token would make the
+    /// deadline test pass by timing out rather than by the mechanism under test.
+    /// </remarks>
+    public Func<CancellationToken, Task>? Block { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether every image should claim the first page's number.</summary>
+    /// <remarks>Exercises the duplicate-page defence, which no correct renderer would trigger.</remarks>
+    public bool RepeatFirstPageNumber { get; set; }
+
     /// <inheritdoc />
-    public Task<IReadOnlyList<PageImage>> RenderAsync(
+    public async Task<IReadOnlyList<PageImage>> RenderAsync(
         DocumentReference document,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         Interlocked.Increment(ref _callCount);
+
+        if (Block is not null)
+        {
+            await Block(cancellationToken).ConfigureAwait(false);
+        }
 
         if (Failure is not null)
         {
@@ -89,10 +148,13 @@ public sealed class StubPageImageRenderer(Func<int> pageCount) : IPageImageRende
         List<PageImage> images = [];
         for (int page = TextLayer.FirstLogicalPageNumber; page < TextLayer.FirstLogicalPageNumber + pageCount(); page++)
         {
-            images.Add(new PageImage(page, "image/png", new byte[] { 0x89, 0x50, 0x4E, 0x47, (byte)page }));
+            images.Add(new PageImage(
+                RepeatFirstPageNumber ? TextLayer.FirstLogicalPageNumber : page,
+                "image/png",
+                new byte[] { 0x89, 0x50, 0x4E, 0x47, (byte)page }));
         }
 
-        return Task.FromResult<IReadOnlyList<PageImage>>(images);
+        return images;
     }
 }
 

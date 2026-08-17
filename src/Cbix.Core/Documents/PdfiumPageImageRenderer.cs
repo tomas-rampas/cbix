@@ -75,11 +75,15 @@ namespace Cbix.Core.Documents;
 /// <see cref="LocalDocumentContentProfile"/>.
 /// </para>
 /// <para>
-/// <b>The document is parsed once.</b> Rendering goes through <c>ToImagesAsync</c>, which opens the
-/// document once and yields pages from it. The per-page <c>SavePng(Stream, ...)</c> overload this
-/// replaced re-loads and re-parses the whole document for every page, which turns a hostile
-/// N-page file into N parses - quadratic work on attacker-controlled input, and the reason the
-/// switch is a security fix rather than a tidy-up.
+/// <b>The document is parsed twice, not N times, and not once.</b> Precision matters here because
+/// an earlier revision of this sentence claimed "once" and was wrong: there are two crossings, one
+/// in <c>GetPageSizes</c> to read the geometry the ceilings are applied to, and one in
+/// <c>ToImagesAsync</c> to draw the pages. What changed - and it is a security fix rather than a
+/// tidy-up - is the growth rate. The per-page <c>SavePng(Stream, ...)</c> overload this replaced
+/// re-loaded and re-parsed the whole document for <em>every page</em>, so a hostile N-page file
+/// bought N parses. It is now a constant two, whatever N is. The second parse is the price of
+/// refusing before allocating, and it is worth paying: reading a page table is cheap next to
+/// rasterising one.
 /// </para>
 /// <para>
 /// <b>On <c>UseTiling</c>, decided rather than left open.</b> PDFtoImage offers it to work around
@@ -222,6 +226,7 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
         }
 
         double scale = _renderOptions.Dpi / PdfPointsPerInch;
+        double totalPixels = 0;
 
         for (int index = 0; index < pageSizes.Count; index++)
         {
@@ -247,6 +252,29 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
                     string.Create(
                         CultureInfo.InvariantCulture,
                         $"logical page {index + TextLayer.FirstLogicalPageNumber} declares {page.Width:F0} x {page.Height:F0} points, which at {_renderOptions.Dpi} DPI rasterises to {pixels / 1_000_000:F1} megapixels, above the configured ceiling of {_renderOptions.MaxPageMegapixels}"),
+                    innerException: null);
+            }
+
+            // The aggregate budget, accumulated in the same pass. The two per-page ceilings above
+            // MULTIPLY and their product is unbounded: 500 pages of 69.5 MP each satisfies both and
+            // asks for 34,800 megapixels, which is a measured 23.8 minutes of rendering requested by
+            // a 102 KB file. Megapixels stand in for time here because PDFium's measured throughput
+            // is nearly flat across geometry (22-24 MP/s over a thirtyfold range), so this bounds
+            // wall-clock work without knowing anything about the host.
+            //
+            // Checked inside the loop rather than after it, so an enormous document is refused as
+            // soon as its running total crosses the line rather than after every page has been
+            // measured. Still before anything is drawn.
+            totalPixels += pixels;
+
+            if (totalPixels > _renderOptions.MaxTotalPixels)
+            {
+                throw Refuse(
+                    DocumentNotIngestibleReason.TooLarge,
+                    documentPath,
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"the document's first {index + 1} of {pageSizes.Count} pages already rasterise to {totalPixels / 1_000_000:F1} megapixels at {_renderOptions.Dpi} DPI, above the configured total ceiling of {_renderOptions.MaxTotalMegapixels}"),
                     innerException: null);
             }
         }
@@ -295,7 +323,7 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
                 }
             }
         }
-        catch (PdfException error)
+        catch (PdfException error) when (error is not PdfUnknownException)
         {
             // The document's own fault, and PDFtoImage names it: PdfInvalidFormatException for a
             // corrupt or non-PDF file, PdfPasswordProtectedException and
@@ -303,7 +331,21 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
             // PdfCannotOpenFileException, PdfPageNotFoundException. All deterministic in the bytes,
             // so all a refusal that routes to review rather than to a retry.
             //
-            // PdfUnknownException is deliberately NOT in this arm - see the filter below.
+            // THE EXCLUSION IS LOAD-BEARING, and its absence was a real defect rather than a
+            // stylistic one. The taxonomy WAS probed by reflection before this code was written, and
+            // the probe was right: every one of PDFtoImage's seven exception types derives from
+            // PdfException, PdfUnknownException included. What went wrong is that the prose acted on
+            // the measurement and the code did not - an earlier revision of this comment claimed
+            // "PdfUnknownException is deliberately NOT in this arm - see the filter below" while no
+            // such filter existed, so a bare `catch (PdfException)` swallowed it here and the fault
+            // arm's documentation described a shape it could never receive.
+            //
+            // Why it matters that PdfUnknownException goes the other way: it is what the wrapper
+            // raises when PDFium returns an error code it cannot name. That is a native-boundary
+            // event - the observable end of the same spectrum as a memory-safety defect - and it
+            // belongs on the Error/1018 line an operator alerts on, not filed at Warning/1017 as
+            // "the supplier sent a bad document". Being caught here made the one native signal this
+            // class can actually observe indistinguishable from a corrupt PDF.
             throw Refuse(DocumentNotIngestibleReason.Unreadable, documentPath, "the PDF renderer could not read the document", error);
         }
         catch (Exception error) when (error is not PageRenderFaultException
@@ -317,7 +359,12 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
             // as "document unreadable" - and that was wrong in the direction that hides problems.
             // The shapes that actually arrive here are:
             //
-            //   PdfUnknownException     - PDFium returned an error code the wrapper cannot name.
+            //   PdfUnknownException     - PDFium returned an error code the wrapper cannot name. It
+            //                             reaches this arm only because the refusal arm above
+            //                             excludes it explicitly: it derives from PdfException like
+            //                             every other type in that hierarchy (measured by
+            //                             reflection, and pinned by a test so a package bump breaks
+            //                             the build rather than the alert rule).
             //   NullReferenceException  - a Skia or PDFium handle came back null where the managed
             //                             wrapper assumed an object; the usual symptom of a failed
             //                             native allocation, because Skia signals that by returning
@@ -373,8 +420,11 @@ public sealed partial class PdfiumPageImageRenderer : IPageImageRenderer
         {
             return Conversion.GetPageSizes(pdfStream: content, leaveOpen: true, password: null);
         }
-        catch (PdfException error)
+        catch (PdfException error) when (error is not PdfUnknownException)
         {
+            // Same split as the render loop, and it has to be repeated because the geometry read is
+            // a separate crossing of the same native boundary: PDFium can fail to name an error code
+            // while answering "how big are the pages" just as easily as while drawing them.
             throw Refuse(DocumentNotIngestibleReason.Unreadable, documentPath, "the PDF renderer could not read the document's page table", error);
         }
         catch (Exception error) when (error is not DocumentNotIngestibleException

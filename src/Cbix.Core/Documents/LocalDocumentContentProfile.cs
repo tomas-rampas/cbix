@@ -62,7 +62,30 @@ namespace Cbix.Core.Documents;
 /// </remarks>
 public abstract class LocalDocumentContentProfile : IDocumentContentProvider
 {
+    /// <summary>
+    /// How long one document's preparation may run before it is abandoned, when no deadline is
+    /// configured.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Generous on purpose, because it is a backstop rather than a budget. The renderer's aggregate
+    /// megapixel ceiling already bounds a legitimate document to roughly 18 seconds of rasterisation
+    /// at measured throughput, and a real country manual - a handful of A4 pages - is under a second.
+    /// Five minutes is about seventeen times the worst case the ceilings admit, so it will not fire
+    /// on slow hardware or a loaded host; it fires when something is wrong in a way the pixel
+    /// arithmetic could not predict.
+    /// </para>
+    /// <para>
+    /// It is not a substitute for those ceilings and must not be treated as one. A deadline only
+    /// stops work after it has been running - it cannot un-allocate a 3 GB bitmap, and a pipeline
+    /// relying on it alone would spend the full five minutes on every hostile document instead of
+    /// refusing it in microseconds.
+    /// </para>
+    /// </remarks>
+    public static readonly TimeSpan DefaultPreparationDeadline = TimeSpan.FromMinutes(5);
+
     private readonly ITextLayerExtractor _textLayerExtractor;
+    private readonly TimeSpan _preparationDeadline;
 
     /// <summary>
     /// One preparation per document, kept as the in-flight task rather than the finished value so
@@ -102,12 +125,33 @@ public abstract class LocalDocumentContentProfile : IDocumentContentProvider
     /// the seam is already decorator-shaped, which is how the existing suite counts extractions.
     /// </para>
     /// </param>
+    /// <param name="preparationDeadline">
+    /// How long one document's preparation - text extraction plus any rendering - may run before it
+    /// is abandoned, or <see langword="null"/> for <see cref="DefaultPreparationDeadline"/>.
+    /// <para>
+    /// <b>This is the backstop behind the renderer's pre-allocation ceilings, not the primary
+    /// control.</b> Those ceilings refuse an over-large document before any work starts, which is
+    /// always better: no work is wasted and the refusal is deterministic. The deadline exists for
+    /// what an estimate cannot cover - a host far slower than the one the budgets were measured on,
+    /// a pathological document that renders slowly for its pixel count, a collaborator that hangs
+    /// on something other than pixels.
+    /// </para>
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="textLayerExtractor"/> is <see langword="null"/>.</exception>
-    protected LocalDocumentContentProfile(ITextLayerExtractor textLayerExtractor)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="preparationDeadline"/> is not positive.</exception>
+    protected LocalDocumentContentProfile(
+        ITextLayerExtractor textLayerExtractor,
+        TimeSpan? preparationDeadline = null)
     {
         ArgumentNullException.ThrowIfNull(textLayerExtractor);
 
+        if (preparationDeadline is { } deadline)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(deadline, TimeSpan.Zero, nameof(preparationDeadline));
+        }
+
         _textLayerExtractor = textLayerExtractor;
+        _preparationDeadline = preparationDeadline ?? DefaultPreparationDeadline;
     }
 
     /// <summary>
@@ -144,55 +188,115 @@ public abstract class LocalDocumentContentProfile : IDocumentContentProvider
         // against the wrong source.
         resumeFrom?.IsRedeemableBy(document, Capabilities.ProfileName);
 
-        Lazy<Task<DocumentContent>> preparation = _prepared.GetOrAdd(
+        Lazy<Task<DocumentContent>> preparation = GetOrStartPreparation(document);
+
+        // WaitAsync, rather than passing the caller's token into the shared work. One preparation is
+        // joined by the seven-way section fan-out; if the token flowed into the shared task, the
+        // first agent to be cancelled would cancel the document preparation the other six are
+        // waiting on. This way a caller's cancellation abandons that caller's wait and nobody
+        // else's.
+        //
+        // What the abandoned work then costs, corrected: an earlier version of this comment said
+        // "milliseconds", which was true of the documents this pipeline expects and wrong by five
+        // orders of magnitude at the ceilings it actually admits - a document sized to the aggregate
+        // budget is about 18 seconds of rendering, and before that budget existed the admissible
+        // worst case was 24 minutes. The honest bound is: at most the profile's own preparation
+        // deadline, and in practice whatever the renderer's pre-allocation ceilings permit. That is
+        // a bounded amount of CPU nobody is waiting for, not a leak - but it is seconds, not
+        // milliseconds, and the deadline is what makes the sentence true at all.
+        //
+        // No eviction logic here any more: see GetOrStartPreparation, which attaches it to the task
+        // itself. Evicting from a caller's catch block could only ever act on what that caller
+        // happened to observe, and the failure it must survive - a run-level teardown cancelling
+        // every observer at once, with the shared work faulting a moment later - is precisely the
+        // case where no caller observes the fault at all.
+        return await preparation.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the memo entry for a document, starting the preparation if this is the first ask.
+    /// </summary>
+    /// <remarks>
+    /// The eviction-on-failure rule lives here, bound to the task rather than to any caller's view of
+    /// it, and that placement is the whole point. Two earlier arrangements failed:
+    /// <list type="bullet">
+    /// <item>evicting in a caller's <c>catch</c> filtered on exception type, which kept a cancelled
+    /// shared task memoised forever;</item>
+    /// <item>evicting in a caller's <c>catch</c> filtered on that caller's token, which has a blind
+    /// spot for the realistic teardown - every observer holds a token linked to one run-level source,
+    /// so all of them are cancelled simultaneously and none is left to notice the fault. Worse, a
+    /// caller can abandon its wait <em>before</em> the shared work fails, so at the moment it looks
+    /// the task has not faulted yet.</item>
+    /// </list>
+    /// A continuation on the task itself has no blind spot: it runs when the work finishes badly,
+    /// whether or not anyone is still watching, and whatever they were doing at the time.
+    /// </remarks>
+    private Lazy<Task<DocumentContent>> GetOrStartPreparation(DocumentReference document)
+    {
+        return _prepared.GetOrAdd(
             document.DocumentId,
-            static (_, state) => new Lazy<Task<DocumentContent>>(
-                // Task.Run, and it is the difference between the guarantee below being true and
-                // being a comment. PrepareCoreAsync's collaborators do real synchronous work - a
-                // PDFPig parse, a PDFium render - before they reach an await, and a factory that
-                // called it directly would run all of that INSIDE the Lazy's initialisation lock, on
-                // whichever thread happened to arrive first. Lazy.Value would then not return until
-                // the whole preparation had finished, every other caller would block on the lock
-                // rather than await it, and WaitAsync would receive an already-completed task and
-                // never observe a token. Measured consequence of the earlier shape: joiners occupied
-                // pool threads for the full parse-and-render and could not be cancelled at all.
-                // Running the body on the pool makes Lazy.Value return a hot task immediately, which
-                // is what turns the WaitAsync below into a genuine cancellation point.
-                () => Task.Run(() => state.Profile.PrepareCoreAsync(state.Document)),
-                LazyThreadSafetyMode.ExecutionAndPublication),
+            static (_, state) => CreateEntry(state.Profile, state.Document),
             (Profile: this, Document: document));
 
-        try
+        static Lazy<Task<DocumentContent>> CreateEntry(LocalDocumentContentProfile profile, DocumentReference document)
         {
-            // WaitAsync, rather than passing the caller's token into the shared work. One
-            // preparation is joined by the seven-way section fan-out; if the token flowed into the
-            // shared task, the first agent to be cancelled would cancel the document preparation the
-            // other six are waiting on. This way a caller's cancellation abandons that caller's wait
-            // and nobody else's. The work it walks away from is a bounded local parse and render -
-            // itself bounded by PageImageRenderOptions' ceilings - so letting it finish costs
-            // milliseconds rather than leaking anything.
-            return await preparation.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            // The gate is "did THIS caller cancel", not "what type was thrown", and the difference
-            // is a real defect the earlier version had. Filtering on OperationCanceledException
-            // meant that if the shared work itself ended cancelled - for any reason other than this
-            // caller's token - the entry was kept, and every later caller in the run would await
-            // that same cancelled task forever. A memo poisoned permanently by one transient event.
-            //
-            // Now: this caller cancelling leaves the entry alone (the shared work may still be
-            // completing perfectly well for the other six agents), and anything else evicts.
-            //
-            // Removed only if this exact entry is still the one in the dictionary - another caller
-            // may already have evicted it and started a fresh attempt, and removing that one would
-            // discard work in flight. The ICollection cast is how ConcurrentDictionary exposes its
-            // compare-and-remove; TryRemove(key) alone would not make that check.
-            ICollection<KeyValuePair<string, Lazy<Task<DocumentContent>>>> entries = _prepared;
-            entries.Remove(new KeyValuePair<string, Lazy<Task<DocumentContent>>>(document.DocumentId, preparation));
+            // The Lazy has to refer to itself, because the eviction has to remove THIS entry and not
+            // merely the key: another caller may already have evicted it and started a fresh
+            // attempt, and removing that one would discard work in flight. Assigned after
+            // construction and captured by the closure - safe because the factory cannot run before
+            // the assignment completes, since nothing can read .Value until GetOrAdd has returned
+            // the object.
+            Lazy<Task<DocumentContent>>? entry = null;
 
-            throw;
+            entry = new Lazy<Task<DocumentContent>>(
+                () => profile.StartAndEvictOnFailure(document, entry!),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+
+            return entry;
         }
+    }
+
+    /// <summary>Starts one preparation, and arranges for a failed one to leave the memo.</summary>
+    private Task<DocumentContent> StartAndEvictOnFailure(DocumentReference document, Lazy<Task<DocumentContent>> entry)
+    {
+        // Task.Run, and it is the difference between the cancellation guarantee in PrepareAsync
+        // being true and being a comment. PrepareCoreAsync's collaborators do real synchronous work
+        // - a PDFPig parse, a PDFium render - before they reach an await, and calling it directly
+        // here would run all of that INSIDE the Lazy's initialisation lock, on whichever thread
+        // arrived first. Lazy.Value would then not return until the whole preparation had finished,
+        // every other caller would block on the lock rather than await it, and WaitAsync would
+        // receive an already-completed task and never observe a token. Measured consequence of the
+        // earlier shape: joiners occupied pool threads for the full parse-and-render and could not
+        // be cancelled at all. Running the body on the pool makes Lazy.Value return a hot task
+        // immediately, which is what makes WaitAsync a genuine cancellation point.
+        Task<DocumentContent> preparation = Task.Run(() => PrepareCoreAsync(document));
+
+        // NotOnRanToCompletion: faulted AND cancelled both evict. A memo entry that will never yield
+        // content is worthless whichever way it died, and remembering it turns one transient failure
+        // into a permanent one for the rest of the run.
+        //
+        // Fire-and-forget by design, and it cannot swallow anything: the body only removes a
+        // dictionary entry, and every caller still observes the task's own exception through its own
+        // await. ExecuteSynchronously because that body is a single interlocked removal - handing it
+        // to the scheduler would cost more than doing it.
+        _ = preparation.ContinueWith(
+            static (_, state) =>
+            {
+                (ConcurrentDictionary<string, Lazy<Task<DocumentContent>>> memo, string documentId, Lazy<Task<DocumentContent>> entry) =
+                    ((ConcurrentDictionary<string, Lazy<Task<DocumentContent>>>, string, Lazy<Task<DocumentContent>>))state!;
+
+                // Compare-and-remove, not TryRemove(key): another caller may already have evicted
+                // this entry and started a fresh attempt, and removing that one would discard work
+                // in flight.
+                ICollection<KeyValuePair<string, Lazy<Task<DocumentContent>>>> entries = memo;
+                entries.Remove(new KeyValuePair<string, Lazy<Task<DocumentContent>>>(documentId, entry));
+            },
+            (_prepared, document.DocumentId, entry),
+            CancellationToken.None,
+            TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        return preparation;
     }
 
     /// <summary>
@@ -235,10 +339,40 @@ public abstract class LocalDocumentContentProfile : IDocumentContentProvider
         TextLayer textLayer;
         IReadOnlyList<PageImage>? pageImages;
 
+        // A deadline the PROFILE owns, not the caller's token, and the distinction is the whole
+        // design. The severed-token arrangement stands: a caller's cancellation must never reach the
+        // shared work, because one agent of the seven-way fan-out giving up would otherwise cancel
+        // the preparation the other six are waiting on. But the previous code passed
+        // CancellationToken.None here, which severed the token and put nothing in its place - so the
+        // renderer's between-pages cancellation check was dead code on the production path, and a
+        // runaway render had no way to stop at all.
+        //
+        // This token is nobody's caller and everybody's ceiling: it belongs to this one preparation,
+        // it fires only on elapsed time, and it makes the renderer's check reachable.
+        using CancellationTokenSource deadline = new(_preparationDeadline);
+
         try
         {
-            textLayer = await _textLayerExtractor.ExtractAsync(document, CancellationToken.None).ConfigureAwait(false);
-            pageImages = await RenderPagesAsync(document, CancellationToken.None).ConfigureAwait(false);
+            textLayer = await _textLayerExtractor.ExtractAsync(document, deadline.Token).ConfigureAwait(false);
+            pageImages = await RenderPagesAsync(document, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (deadline.IsCancellationRequested)
+        {
+            // Translated rather than propagated. A bare OperationCanceledException leaving here would
+            // be read by PrepareAsync's joiners as their own cancellation, and by the workflow as a
+            // graceful stop, when in fact the document defeated its own resource budget.
+            //
+            // Not transient: the work is bounded by the document, so a retry buys another full
+            // deadline of the same rendering to reach the same place. Review is where it belongs.
+            throw new DocumentPreparationException(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    // The TimeSpan itself, not a rounded seconds count: "F0" rendered a 250 ms
+                    // deadline as "0s", which reads like a misconfiguration report rather than a
+                    // timeout and would send an operator hunting for a zero in the config.
+                    $"Document '{document.DocumentId}' could not be presented within the preparation deadline of {_preparationDeadline}."),
+                isTransient: false,
+                error);
         }
         catch (DocumentNotIngestibleException error)
         {
@@ -323,7 +457,30 @@ public abstract class LocalDocumentContentProfile : IDocumentContentProvider
                 isTransient: false);
         }
 
-        Dictionary<int, PageImage>? imagesByPage = pageImages?.ToDictionary(image => image.LogicalPageNumber);
+        // Built defensively rather than with ToDictionary, which throws a raw ArgumentException on a
+        // duplicate key. That call sat outside every classification filter above, so a renderer
+        // returning two images numbered page 3 would have escaped this class as an unclassified
+        // argument error - the one failure shape a caller has no contract for, from the same
+        // untrusted-input path everything else here is careful about. Defended like its sibling, the
+        // missing-page check in AppendPageContent.
+        Dictionary<int, PageImage>? imagesByPage = null;
+
+        if (pageImages is not null)
+        {
+            imagesByPage = new Dictionary<int, PageImage>(pageImages.Count);
+
+            foreach (PageImage image in pageImages)
+            {
+                if (!imagesByPage.TryAdd(image.LogicalPageNumber, image))
+                {
+                    throw new DocumentPreparationException(
+                        string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"Document '{document.DocumentId}' produced two rendered images for logical page {image.LogicalPageNumber}; page provenance cannot be attributed."),
+                        isTransient: false);
+                }
+            }
+        }
 
         List<AIContent> content = [];
         for (int page = TextLayer.FirstLogicalPageNumber; page < TextLayer.FirstLogicalPageNumber + textLayer.PageCount; page++)

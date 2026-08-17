@@ -62,11 +62,18 @@ public sealed class GenericVisionProfileSteps(GenericVisionProfileState state)
         int dpi = LocalDocumentProfileFixture.CoreConstant<int>("PageImageRenderOptions", "DefaultDpi");
         int maxPageCount = LocalDocumentProfileFixture.CoreConstant<int>("PageImageRenderOptions", "DefaultMaxPageCount");
         int maxPageMegapixels = LocalDocumentProfileFixture.CoreConstant<int>("PageImageRenderOptions", "DefaultMaxPageMegapixels");
+        int maxTotalMegapixels = LocalDocumentProfileFixture.CoreConstant<int>("PageImageRenderOptions", "DefaultMaxTotalMegapixels");
+
+        // Every parameter passed explicitly, defaults and all: Activator.CreateInstance does not fill
+        // optional parameters, so a constructor that grows silently breaks this step rather than
+        // silently picking defaults. The values still come off the type, so the scenario exercises
+        // the production configuration.
         object renderOptions = LocalDocumentProfileFixture.CreateCoreInstance(
             "PageImageRenderOptions",
             dpi,
             maxPageCount,
-            maxPageMegapixels);
+            maxPageMegapixels,
+            maxTotalMegapixels);
         object renderer = LocalDocumentProfileFixture.CreateCoreInstance(
             "PdfiumPageImageRenderer",
             ingestOptions,
@@ -80,7 +87,10 @@ public sealed class GenericVisionProfileSteps(GenericVisionProfileState state)
         state.Profile = (IDocumentContentProvider)LocalDocumentProfileFixture.CreateCoreInstance(
             "GenericVisionDocumentContentProfile",
             extractor,
-            renderer);
+            renderer,
+            // Null means the profile's own default deadline, which is what production gets. Passed
+            // rather than omitted for the reason above: Activator does not fill optional parameters.
+            null);
     }
 
     [When("the generic-vision profile prepares document content")]

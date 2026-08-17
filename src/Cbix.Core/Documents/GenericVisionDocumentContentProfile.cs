@@ -61,11 +61,19 @@ public sealed class GenericVisionDocumentContentProfile : LocalDocumentContentPr
     /// <summary>Initialises a new <see cref="GenericVisionDocumentContentProfile"/>.</summary>
     /// <param name="textLayerExtractor">Produces the per-page text; see <see cref="LocalDocumentContentProfile"/> for why the port rather than a <see cref="TextLayer"/>.</param>
     /// <param name="pageImageRenderer">Rasterises the pages this profile presents visually.</param>
-    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    /// <param name="preparationDeadline">
+    /// How long one document's preparation may run before it is abandoned, or <see langword="null"/>
+    /// for <see cref="LocalDocumentContentProfile.DefaultPreparationDeadline"/>. Exposed here
+    /// specifically because this is the profile that renders: it is the one whose work a deadline
+    /// can meaningfully bound, and the one a deployment might need to give more room on slow
+    /// hardware.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Either collaborator is <see langword="null"/>.</exception>
     public GenericVisionDocumentContentProfile(
         ITextLayerExtractor textLayerExtractor,
-        IPageImageRenderer pageImageRenderer)
-        : base(textLayerExtractor)
+        IPageImageRenderer pageImageRenderer,
+        TimeSpan? preparationDeadline = null)
+        : base(textLayerExtractor, preparationDeadline)
     {
         ArgumentNullException.ThrowIfNull(pageImageRenderer);
 

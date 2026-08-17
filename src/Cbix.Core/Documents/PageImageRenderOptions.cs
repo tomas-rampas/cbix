@@ -131,6 +131,52 @@ public sealed record PageImageRenderOptions
     /// </remarks>
     public const int MaximumMaxPageMegapixels = 1000;
 
+    /// <summary>
+    /// The default ceiling on the rasterised size of a whole document, in megapixels, summed across
+    /// its pages and evaluated before anything is drawn.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a third ceiling: the first two multiply, and their product is unbounded.</b> A document
+    /// can sit under the page-count ceiling AND under the per-page ceiling on every single page while
+    /// still demanding an enormous amount of work in total - 500 pages of 69.5 MP each passes both
+    /// and asks for 34,800 megapixels. Measured, on this machine: that is <b>23.8 minutes</b> of
+    /// rendering, requested by a <b>102 KB</b> file. Neither existing ceiling sees it, because
+    /// neither looks at the total.
+    /// </para>
+    /// <para>
+    /// <b>Megapixels are the right unit because they are a proxy for time.</b> Measured across a
+    /// thirtyfold range of page geometry, PDFium's throughput is nearly flat: A4 at 150 DPI renders
+    /// 2.2 MP in 0.10 s and A3 at 600 DPI renders 69.6 MP in 2.86 s - 22 and 24 megapixels per
+    /// second respectively. So a budget denominated in megapixels bounds wall-clock work to within
+    /// about ten percent, without this type needing to know anything about the host's speed.
+    /// </para>
+    /// <para>
+    /// <b>The arithmetic for 400.</b> What it admits: 184 A4 pages at the default DPI - a country
+    /// manual runs to a handful (design 5.1), so this is two orders of magnitude of headroom - and,
+    /// at the measured rate, about <b>18 seconds</b> of rendering. What it refuses: the 34,800 MP
+    /// case above, by a factor of 87.
+    /// </para>
+    /// <para>
+    /// <b>How this interacts with <see cref="MaxPageCount"/>, stated because at the defaults it
+    /// mostly supersedes it.</b> At the default DPI on A4 this budget binds at 184 pages, well before
+    /// the 500-page ceiling, so page count is rarely the check that fires. It is still worth keeping
+    /// and still checked first: it is O(1) against a number the document declares, so it rejects the
+    /// 5000-page case before any geometry is walked, and it catches documents whose pages are
+    /// individually tiny - 5000 pages of one-point squares would pass this budget comfortably and is
+    /// still not a document anyone should render.
+    /// </para>
+    /// </remarks>
+    public const int DefaultMaxTotalMegapixels = 400;
+
+    /// <summary>Upper bound on <see cref="MaxTotalMegapixels"/> itself.</summary>
+    /// <remarks>
+    /// At the measured ~23 megapixels per second, 20,000 megapixels is about fifteen minutes of
+    /// rendering for one document. That is already past anything this pipeline should attempt in a
+    /// single workflow step; the cap keeps raising the budget a bounded decision.
+    /// </remarks>
+    public const int MaximumMaxTotalMegapixels = 20_000;
+
     /// <summary>Initialises a new <see cref="PageImageRenderOptions"/>.</summary>
     /// <param name="dpi">
     /// Rasterisation density in dots per inch, between <see cref="MinimumDpi"/> and
@@ -144,11 +190,16 @@ public sealed record PageImageRenderOptions
     /// Largest rasterised page, in megapixels, between 1 and <see cref="MaximumMaxPageMegapixels"/>.
     /// Defaults to <see cref="DefaultMaxPageMegapixels"/>.
     /// </param>
+    /// <param name="maxTotalMegapixels">
+    /// Largest rasterised document, in megapixels summed across its pages, between 1 and
+    /// <see cref="MaximumMaxTotalMegapixels"/>. Defaults to <see cref="DefaultMaxTotalMegapixels"/>.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">Any argument is outside its accepted range.</exception>
     public PageImageRenderOptions(
         int dpi = DefaultDpi,
         int maxPageCount = DefaultMaxPageCount,
-        int maxPageMegapixels = DefaultMaxPageMegapixels)
+        int maxPageMegapixels = DefaultMaxPageMegapixels,
+        int maxTotalMegapixels = DefaultMaxTotalMegapixels)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(dpi, MinimumDpi);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(dpi, MaximumDpi);
@@ -156,10 +207,17 @@ public sealed record PageImageRenderOptions
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maxPageCount, MaximumMaxPageCount);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxPageMegapixels, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maxPageMegapixels, MaximumMaxPageMegapixels);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxTotalMegapixels, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maxTotalMegapixels, MaximumMaxTotalMegapixels);
 
+        // Deliberately NOT rejected: a total budget smaller than the per-page ceiling. It reads like
+        // a contradiction and is not one - it simply means the aggregate binds first, which is a
+        // coherent way to say "any geometry per page, but not much of it in one document". Refusing
+        // the combination would invent a constraint neither bound implies.
         Dpi = dpi;
         MaxPageCount = maxPageCount;
         MaxPageMegapixels = maxPageMegapixels;
+        MaxTotalMegapixels = maxTotalMegapixels;
     }
 
     /// <summary>Gets the rasterisation density in dots per inch.</summary>
@@ -170,6 +228,17 @@ public sealed record PageImageRenderOptions
 
     /// <summary>Gets the largest rasterised page, in megapixels, that will be drawn rather than refused.</summary>
     public int MaxPageMegapixels { get; }
+
+    /// <summary>Gets the largest rasterised document, in megapixels summed across its pages, that will be drawn rather than refused.</summary>
+    public int MaxTotalMegapixels { get; }
+
+    /// <summary>Gets <see cref="MaxTotalMegapixels"/> as a pixel count, the unit the pre-render check compares against.</summary>
+    /// <remarks>
+    /// <c>long</c> for the reason given on <see cref="MaxPagePixels"/>, and more urgently: this one
+    /// accumulates across pages, so it exceeds <see cref="int"/> range at the default settings, let
+    /// alone hostile ones.
+    /// </remarks>
+    public long MaxTotalPixels => (long)MaxTotalMegapixels * 1_000_000L;
 
     /// <summary>
     /// Gets <see cref="MaxPageMegapixels"/> as a pixel count, which is the unit the pre-render check

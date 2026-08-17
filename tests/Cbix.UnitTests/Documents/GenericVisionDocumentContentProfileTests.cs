@@ -199,6 +199,65 @@ public sealed class GenericVisionDocumentContentProfileTests : LocalDocumentCont
     }
 
     [Fact]
+    public async Task PrepareAsync_WhenTheRenderExceedsTheDeadline_FailsInsteadOfRunningOn()
+    {
+        // The deadline the profile owns. Before it existed, PrepareCoreAsync passed
+        // CancellationToken.None to RenderPagesAsync, which made the renderer's between-pages
+        // cancellation check dead code on the production path: a runaway render had no way to stop.
+        //
+        // A renderer that parks forever stands in for a document that renders far more slowly than
+        // its pixel count predicted - the case the pre-allocation ceilings cannot catch, which is
+        // exactly why the deadline exists behind them.
+        StubTextLayerExtractor extractor = new("page one");
+        StubPageImageRenderer renderer = new(1)
+        {
+            // Honours the token it is given, as any well-behaved collaborator does - and the point
+            // of the fix is that the token it is given is now a real one rather than None.
+            Block = token => Task.Delay(Timeout.Infinite, token),
+        };
+
+        GenericVisionDocumentContentProfile profile = new(extractor, renderer, TimeSpan.FromMilliseconds(250));
+
+        DocumentPreparationException error = await Assert.ThrowsAsync<DocumentPreparationException>(
+            () => profile.PrepareAsync(TestDocuments.Create()));
+
+        // Translated, not propagated as a bare cancellation: a joiner would otherwise read it as its
+        // own cancellation and the workflow as a graceful stop, when the document actually defeated
+        // its resource budget.
+        Assert.False(error.IsTransient);
+        Assert.Contains("preparation deadline", error.Message, StringComparison.Ordinal);
+        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+    }
+
+    [Fact]
+    public void Constructor_NonPositiveDeadline_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new GenericVisionDocumentContentProfile(new StubTextLayerExtractor(), new StubPageImageRenderer(1), TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new GenericVisionDocumentContentProfile(new StubTextLayerExtractor(), new StubPageImageRenderer(1), TimeSpan.FromSeconds(-1)));
+    }
+
+    [Fact]
+    public async Task PrepareAsync_WhenTheRendererRepeatsAPageNumber_FailsWithAClassifiedError()
+    {
+        // The duplicate-page defence. Building the page lookup with ToDictionary threw a raw
+        // ArgumentException from outside every classification filter, so this - a renderer returning
+        // two images numbered page 1, on the untrusted-input path everything else here guards - would
+        // have escaped as the one failure shape a caller has no contract for.
+        StubTextLayerExtractor extractor = new("page one", "page two");
+        StubPageImageRenderer renderer = new(2) { RepeatFirstPageNumber = true };
+
+        GenericVisionDocumentContentProfile profile = new(extractor, renderer);
+
+        DocumentPreparationException error = await Assert.ThrowsAsync<DocumentPreparationException>(
+            () => profile.PrepareAsync(TestDocuments.Create()));
+
+        Assert.False(error.IsTransient);
+        Assert.Contains("two rendered images for logical page 1", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PrepareAsync_WhenTheShareFailsDuringTheRender_IsTransient()
     {
         StubTextLayerExtractor extractor = new("page one");

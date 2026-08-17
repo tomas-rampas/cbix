@@ -6,6 +6,8 @@ using Cbix.Core.Ingest;
 
 using Microsoft.Extensions.Logging;
 
+using PDFtoImage.Exceptions;
+
 namespace Cbix.UnitTests.Documents;
 
 /// <summary>
@@ -198,6 +200,50 @@ public sealed class PdfiumPageImageRendererTests : IDisposable
     }
 
     [Fact]
+    public async Task RenderAsync_PastTheAggregateBudget_IsRefusedBeforeAnythingIsRasterised()
+    {
+        // The gap the two per-page ceilings leave open, because they MULTIPLY. Every page here is
+        // A3-sized - comfortably under the per-page megapixel ceiling - and the page count is under
+        // its ceiling too, so both existing gates wave it through while the total is enormous.
+        //
+        // Measured at production scale: 500 such pages at 600 DPI is 34,800 megapixels and 23.8
+        // minutes of rendering, from a 102 KB file. This probe uses a small page count and a small
+        // budget to assert the same gate cheaply.
+        DocumentReference document = WriteFile("aggregate-bomb.pdf", BuildPdf(widthPoints: 842, heightPoints: 1191, pages: 20));
+
+        PdfiumPageImageRenderer renderer = new(
+            new DocumentIngestOptions(Path.GetTempPath(), DocumentIngestOptions.ClaudeFilesApiLimitBytes),
+            new PageImageRenderOptions(maxTotalMegapixels: 10),
+            _logger);
+
+        DocumentNotIngestibleException error = await Assert.ThrowsAsync<DocumentNotIngestibleException>(
+            () => renderer.RenderAsync(document));
+
+        Assert.Equal(DocumentNotIngestibleReason.TooLarge, error.Reason);
+
+        (LogLevel level, int eventId, string message) = Assert.Single(_logger.Entries);
+        Assert.Equal(RenderRefusedEventId, eventId);
+        Assert.Contains("above the configured total ceiling of 10", message, StringComparison.Ordinal);
+
+        // Refused partway through the geometry walk, not after measuring all 20 pages: the running
+        // total crosses the line and the document is rejected there.
+        Assert.Contains("of 20 pages already rasterise", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RenderAsync_WithinTheAggregateBudget_IsStillRendered()
+    {
+        // Guards the aggregate gate against being set so tight it refuses ordinary work: a real
+        // country manual is a handful of A4 pages and must sail through the default budget.
+        DocumentReference document = WriteFile("ordinary.pdf", BuildPdf(widthPoints: 595, heightPoints: 842, pages: 6));
+
+        IReadOnlyList<PageImage> images = await Renderer().RenderAsync(document);
+
+        Assert.Equal(6, images.Count);
+        Assert.Empty(_logger.Entries);
+    }
+
+    [Fact]
     public async Task RenderAsync_PastThePageCountCeiling_IsRefusedBeforeAnythingIsRasterised()
     {
         // The second document-controlled multiplier. Page count is free to declare - a 1.05 MB file
@@ -217,6 +263,39 @@ public sealed class PdfiumPageImageRendererTests : IDisposable
         (LogLevel level, int eventId, string message) = Assert.Single(_logger.Entries);
         Assert.Equal(RenderRefusedEventId, eventId);
         Assert.Contains("declares 12 pages, above the configured ceiling of 10", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PdfUnknownException_DerivesFromPdfException_WhichIsWhyTheRefusalArmMustExcludeIt()
+    {
+        // Pins the assumption the whole refusal/fault split rests on, so that a PDFtoImage bump
+        // which reparents these types breaks the BUILD rather than silently re-routing native-
+        // boundary faults into the Warning-level refusal channel - a regression that would be
+        // invisible until someone wondered why the renderer alert never fires.
+        //
+        // This inheritance is exactly what makes the `when (error is not PdfUnknownException)`
+        // filter load-bearing: without it, `catch (PdfException)` swallows the unknown-error case.
+        // An earlier revision measured this correctly by reflection and then shipped code that
+        // contradicted the measurement, which is why it is now asserted rather than commented.
+        Assert.True(
+            typeof(PdfException).IsAssignableFrom(typeof(PdfUnknownException)),
+            "PdfUnknownException no longer derives from PdfException; revisit the catch filters in PdfiumPageImageRenderer.");
+
+        // And the siblings that legitimately belong in the refusal arm.
+        Assert.True(typeof(PdfException).IsAssignableFrom(typeof(PdfInvalidFormatException)));
+        Assert.True(typeof(PdfException).IsAssignableFrom(typeof(PdfPasswordProtectedException)));
+        Assert.True(typeof(PdfException).IsAssignableFrom(typeof(PdfCannotOpenFileException)));
+
+        // The filter's own logic, evaluated the way the catch clause evaluates it: against a
+        // PdfException-typed reference, because that is what the runtime hands a catch filter. The
+        // static type has to be the base for this to mean anything - written against the derived
+        // types the compiler decides it outright (CS8121), which proves the point but does not test
+        // the routing.
+        PdfException unknown = new PdfUnknownException();
+        PdfException malformed = new PdfInvalidFormatException();
+
+        Assert.False(unknown is not PdfUnknownException, "The refusal arm's filter would admit PdfUnknownException.");
+        Assert.True(malformed is not PdfUnknownException, "The refusal arm's filter would reject an ordinary malformed-PDF exception.");
     }
 
     [Fact]

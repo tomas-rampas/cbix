@@ -99,19 +99,23 @@ public abstract class LocalDocumentContentProfileContract
         // the sequential test and fails this one.
         const int Callers = 8;
 
-        // A CountdownEvent as an arrival barrier, not a plain gate. The earlier version released
-        // the gate as soon as the test thread reached Set(), which does not establish that any
-        // caller had arrived yet: on an unlucky schedule the first caller could complete the whole
-        // preparation before the eighth was created, and the test would then assert single
+        // An arrival barrier, not a plain gate. Releasing as soon as the test thread got there would
+        // not establish that any caller had arrived: on an unlucky schedule the first could finish
+        // the whole preparation before the eighth was created, and the test would then assert single
         // preparation against work that was never concurrent - passing for the wrong reason and
-        // never failing on a genuinely racy memo. Now the preparation cannot proceed until every
-        // caller has entered, so the contended path is the one actually measured.
-        using CountdownEvent arrived = new(Callers);
-        using ManualResetEventSlim release = new(initialState: false);
+        // never failing on a genuinely racy memo. The preparation cannot proceed until every caller
+        // has entered, so the contended path is the one actually measured.
+        //
+        // Both signals are tasks rather than wait handles: the preparation runs on the pool now, so
+        // a blocking gate would hold pool threads and starve a suite that runs these classes in
+        // parallel.
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource allArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int arrived = 0;
 
         StubTextLayerExtractor extractor = new()
         {
-            OnCall = () => release.Wait(TimeSpan.FromSeconds(30)),
+            Block = _ => release.Task,
         };
 
         LocalDocumentContentProfile profile = CreateProfile(extractor);
@@ -119,18 +123,20 @@ public abstract class LocalDocumentContentProfileContract
 
         Task<DocumentContent>[] callers =
         [
-            .. Enumerable.Range(0, Callers).Select(_ => Task.Run(() =>
+            .. Enumerable.Range(0, Callers).Select(_ => Task.Run(async () =>
             {
-                arrived.Signal();
-                return profile.PrepareAsync(document);
+                if (Interlocked.Increment(ref arrived) == Callers)
+                {
+                    allArrived.TrySetResult();
+                }
+
+                return await profile.PrepareAsync(document);
             })),
         ];
 
-        Assert.True(
-            arrived.Wait(TimeSpan.FromSeconds(30)),
-            "Not every caller reached the profile, so this did not test concurrent preparation.");
+        await allArrived.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-        release.Set();
+        release.TrySetResult();
         DocumentContent[] results = await Task.WhenAll(callers);
 
         Assert.Equal(1, extractor.CallCount);
@@ -149,11 +155,11 @@ public abstract class LocalDocumentContentProfileContract
         // back a hot task, which is what turns WaitAsync into a real cancellation point.
         //
         // What this asserts: one caller walking away does not take the shared preparation with it.
-        using ManualResetEventSlim release = new(initialState: false);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         StubTextLayerExtractor extractor = new()
         {
-            OnCall = () => release.Wait(TimeSpan.FromSeconds(30)),
+            Block = _ => release.Task,
         };
 
         LocalDocumentContentProfile profile = CreateProfile(extractor);
@@ -178,7 +184,7 @@ public abstract class LocalDocumentContentProfileContract
         // been passed into the preparation instead of into the wait, this is the assertion that
         // would fail: one agent of the seven-way fan-out giving up would have cancelled the
         // document preparation the other six were waiting on.
-        release.Set();
+        release.TrySetResult();
 
         DocumentContent content = await patient;
 
@@ -385,6 +391,77 @@ public abstract class LocalDocumentContentProfileContract
 
         Assert.Equal(2, extractor.CallCount);
         Assert.NotEmpty(content.Content);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_WhenAFaultIsObservedOnlyByCancelledCallers_StillEvictsTheMemo()
+    {
+        // The teardown case that defeated the previous eviction gate. Every observer of a run holds
+        // a token linked to one run-level source, so when the run is cancelled they are ALL cancelled
+        // at the same instant - and a filter asking "did this caller cancel?" is then false for every
+        // one of them simultaneously, leaving a genuinely faulted preparation memoised for whatever
+        // comes next. Asking the TASK whether it faulted has no such blind spot.
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        StubTextLayerExtractor extractor = new()
+        {
+            Block = _ => release.Task,
+            Failure = () => new IOException("the share dropped"),
+        };
+
+        LocalDocumentContentProfile profile = CreateProfile(extractor);
+        DocumentReference document = TestDocuments.Create();
+
+        using CancellationTokenSource runTeardown = new();
+
+        // Started while the token is still live - cancelling BEFORE the call would be rejected by
+        // the entry guard and never reach the memo at all, testing nothing.
+        Task<DocumentContent> observer = profile.PrepareAsync(document, resumeFrom: null, runTeardown.Token);
+
+        // The run is torn down while the preparation is genuinely in flight. This is the ordering
+        // that defeated the previous fix: the observer's wait aborts here, BEFORE the shared work
+        // has failed, so at the moment any caller-side check could run the task has not faulted yet.
+        await runTeardown.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => observer);
+
+        // Captured BEFORE releasing. The stub swaps in a fresh completion source as its call ends,
+        // so asking for the signal afterwards hands back the NEXT call's source - one that nobody
+        // has started and nothing will complete. That mistake hangs rather than fails, which is the
+        // worst way for a test to be wrong.
+        Task extractionFinished = extractor.WaitForCallToFinishAsync();
+
+        // Only now does the shared work fail, with nobody watching it.
+        release.TrySetResult();
+        await extractionFinished.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // The proof: a later caller gets a genuine fresh attempt rather than the remembered failure.
+        extractor.Failure = null;
+
+        // Retried under a bounded timeout rather than awaited once, and the reason is the property
+        // itself: eviction is attached to the TASK, so it is asynchronous with respect to every
+        // caller and there is no caller-side instant at which it is guaranteed to have happened.
+        // A test that assumed one would be asserting a scheduling coincidence.
+        //
+        // The attempts are free and the count assertion stays exact: a retry arriving before the
+        // eviction joins the faulted memo entry and throws WITHOUT calling the extractor, so the
+        // extractor is entered exactly twice however many times round this loop it takes.
+        DocumentContent? content = null;
+
+        for (int attempt = 0; attempt < 200 && content is null; attempt++)
+        {
+            try
+            {
+                content = await profile.PrepareAsync(document);
+            }
+            catch (DocumentPreparationException)
+            {
+                await Task.Delay(25);
+            }
+        }
+
+        Assert.True(content is not null, "The faulted preparation was never evicted; the memo kept it for the rest of the run.");
+        Assert.NotEmpty(content!.Content);
+        Assert.Equal(2, extractor.CallCount);
     }
 
     [Fact]
