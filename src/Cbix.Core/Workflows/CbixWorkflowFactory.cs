@@ -22,28 +22,19 @@ namespace Cbix.Core.Workflows;
 /// <b>The topology, and where each later story attaches.</b>
 /// </para>
 /// <code>
-/// ingest --[IsNewRegistration]------&gt; triage --&gt; sectionExtraction --&gt; persist
-///        \--[already registered]----&gt; duplicateTerminal
+/// ingest --[IsNewRegistration]------&gt; triage --[vouched for]---&gt; sectionExtraction --&gt; persist
+///        \--[already registered]----&gt; duplicateTerminal    \--[needs review]------&gt; review
 /// </code>
 /// <para>
-/// <b>Both branches end in a node that yields an <see cref="ExtractionRunOutcome"/>,</b> so every run
-/// emits exactly one <c>WorkflowOutputEvent</c> carrying its
+/// <b>All three branches end in a node that yields an <see cref="ExtractionRunOutcome"/>,</b> so
+/// every run emits exactly one <c>WorkflowOutputEvent</c> carrying its
 /// <see cref="ExtractionRunDisposition"/>. The duplicate branch used to have no second edge at all -
 /// ingest's message simply matched nothing and the run went quiet - which made "this was a duplicate"
 /// and "this run stalled or crashed" the same observation to anything watching the stream. Two
-/// conditional edges over the same predicate, one node each, is what makes the terminal state total.
+/// conditional edges over the same predicate, one node each, is what makes the terminal state total,
+/// and the review branch added by S01-15 is held to the same standard.
 /// </para>
 /// <list type="bullet">
-///   <item><description>
-///   <b>S01-14</b> replaces the agent behind the <c>triage</c> node. No graph change: the node takes
-///   an <see cref="Microsoft.Agents.AI.AIAgent"/> and does not care which one.
-///   </description></item>
-///   <item><description>
-///   <b>S01-15</b> adds two conditional edges out of <c>triage</c> - one to a review-queue node for
-///   low confidence or an unrecognised document, one onward for everything else. That is a predicate
-///   over <see cref="TriagedDocument"/> and a new node; no existing node or message type moves. The
-///   conditional edge from <c>ingest</c> below is the shape it copies.
-///   </description></item>
 ///   <item><description>
 ///   <b>S01-16</b> replaces <see cref="SectionExtractionStubExecutor"/> with the real DocControl
 ///   agent in the same slot.
@@ -83,6 +74,8 @@ public sealed class CbixWorkflowFactory
     private readonly SectionExtractionStubExecutor _sectionExtraction;
     private readonly PersistStubExecutor _persist;
     private readonly DuplicateTerminalExecutor _duplicateTerminal;
+    private readonly ReviewQueueStubExecutor _review;
+    private readonly TriageRoutingOptions _routing;
 
     /// <summary>Initialises a new <see cref="CbixWorkflowFactory"/>.</summary>
     /// <param name="ingest">The ingest node.</param>
@@ -90,31 +83,46 @@ public sealed class CbixWorkflowFactory
     /// <param name="sectionExtraction">The section-extraction node.</param>
     /// <param name="persist">The terminal node for an extracted document.</param>
     /// <param name="duplicateTerminal">The terminal node for a re-submission.</param>
+    /// <param name="review">The terminal node for a document the pipeline will not vouch for.</param>
+    /// <param name="routing">Where triage's routing edge sits.</param>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
     public CbixWorkflowFactory(
         DocumentIngestExecutor ingest,
         TriageExecutor triage,
         SectionExtractionStubExecutor sectionExtraction,
         PersistStubExecutor persist,
-        DuplicateTerminalExecutor duplicateTerminal)
+        DuplicateTerminalExecutor duplicateTerminal,
+        ReviewQueueStubExecutor review,
+        TriageRoutingOptions routing)
     {
         ArgumentNullException.ThrowIfNull(ingest);
         ArgumentNullException.ThrowIfNull(triage);
         ArgumentNullException.ThrowIfNull(sectionExtraction);
         ArgumentNullException.ThrowIfNull(persist);
         ArgumentNullException.ThrowIfNull(duplicateTerminal);
+        ArgumentNullException.ThrowIfNull(review);
+        ArgumentNullException.ThrowIfNull(routing);
 
         _ingest = ingest;
         _triage = triage;
         _sectionExtraction = sectionExtraction;
         _persist = persist;
         _duplicateTerminal = duplicateTerminal;
+        _review = review;
+        _routing = routing;
     }
 
     /// <summary>Builds the graph for one run.</summary>
     /// <returns>The workflow, ready to hand to a MAF execution environment.</returns>
-    public Workflow Build() =>
-        new WorkflowBuilder(_ingest)
+    public Workflow Build()
+    {
+        // Read once, into a local the two closures below capture. Reading the option inside each
+        // predicate would be equivalent today and would silently stop being so the moment the options
+        // object became mutable or reloadable - at which point one edge could see a new threshold and
+        // the other an old one, and a document would match both or neither.
+        double threshold = _routing.ReviewConfidenceThreshold;
+
+        return new WorkflowBuilder(_ingest)
             .WithName("cbix-extraction")
             .WithDescription("Ingest, triage, section extraction and persist for one country instruction document.")
 
@@ -137,13 +145,28 @@ public sealed class CbixWorkflowFactory
             // type mismatch.
             .AddEdge<DocumentIngestResult>(_ingest, _duplicateTerminal, result => result?.IsNewRegistration is false)
 
-            .AddEdge(_triage, _sectionExtraction)
+            // Design 9's "New/unknown layout family" row, expressed as graph shape (story S01-15). The
+            // same two-conditional-edges-over-one-predicate arrangement the ingest split uses, and for
+            // the same reason: the decision is visible in the topology rather than buried in a node,
+            // and every future node hung off triage inherits it.
+            //
+            // `is true` / `is false` rather than a negation, again deliberately. MAF types a condition
+            // as Func<T?, bool> because it consults the condition for messages that are not of T at all,
+            // so a null must match NEITHER edge - a message of some other type routed to review would
+            // queue a document for a human on the strength of a type mismatch, and routed onward would
+            // extract one on the same basis.
+            .AddEdge<TriagedDocument>(_triage, _review, triaged => triaged?.RequiresReview(threshold) is true)
+            .AddEdge<TriagedDocument>(_triage, _sectionExtraction, triaged => triaged?.RequiresReview(threshold) is false)
+
             .AddEdge(_sectionExtraction, _persist)
 
-            // The terminal designation, and BOTH terminals carry it. Without it the outcome a terminal
-            // node yields never surfaces as a WorkflowOutputEvent, and "the run completed" would be
-            // inferred from the event stream ending - which is also what a stall looks like. Naming both
-            // is what makes that inference unnecessary on either branch rather than only on the happy one.
-            .WithOutputFrom(_persist, _duplicateTerminal)
+            // The terminal designation, and ALL THREE terminals carry it. Without it the outcome a
+            // terminal node yields never surfaces as a WorkflowOutputEvent, and "the run completed" would
+            // be inferred from the event stream ending - which is also what a stall looks like. Naming
+            // every terminal is what makes that inference unnecessary on each branch rather than only on
+            // the happy one, and the review branch is the one where it matters most: a document queued
+            // for a human that also looked like a crashed run would be found twice or not at all.
+            .WithOutputFrom(_persist, _duplicateTerminal, _review)
             .Build();
+    }
 }

@@ -40,6 +40,20 @@ public sealed class ExtractionRunOutcomeTests
     }
 
     [Fact]
+    public void Constructor_RefusesAReviewQueuedRunThatClaimsExtractedSections()
+    {
+        // The same incoherence one branch further along (story S01-15), and worth its own check rather
+        // than being folded into the duplicate one: a document routed to review was routed there
+        // INSTEAD of into extraction, so a non-zero count means the routing edge fired and the section
+        // agents ran anyway - the document queued for a human and paid for twice, reported as if the
+        // gate had worked.
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => new ExtractionRunOutcome(Reference(), ExtractionRunDisposition.ReviewQueued, sectionCount: 7));
+
+        Assert.Equal("sectionCount", error.ParamName);
+    }
+
+    [Fact]
     public void Constructor_RejectsANegativeSectionCount() =>
         Assert.Throws<ArgumentOutOfRangeException>(
             () => new ExtractionRunOutcome(Reference(), ExtractionRunDisposition.Persisted, sectionCount: -1));

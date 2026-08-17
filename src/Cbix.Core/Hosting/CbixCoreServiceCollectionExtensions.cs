@@ -1,5 +1,7 @@
+using Cbix.Core.Agents;
 using Cbix.Core.Documents;
 using Cbix.Core.Ingest;
+using Cbix.Core.Review;
 using Cbix.Core.Workflows;
 
 using Microsoft.Agents.AI;
@@ -62,6 +64,11 @@ public static class CbixCoreServiceCollectionExtensions
     /// The configured provider's document-presentation capability, or <see langword="null"/> for the
     /// default. It selects the active profile; no caller names a profile type.
     /// </param>
+    /// <param name="routingOptions">
+    /// Where triage's review edge sits, or <see langword="null"/> for the default. Passed rather than
+    /// bound, for the same reason as the ingest options: binding it would put a configuration
+    /// dependency into Core for one number the host already has.
+    /// </param>
     /// <returns><paramref name="services"/>, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="ingestOptions"/> is <see langword="null"/>.</exception>
     /// <remarks>
@@ -75,16 +82,24 @@ public static class CbixCoreServiceCollectionExtensions
     /// </para>
     /// <para>
     /// <b>The triage agent is deliberately not registered here.</b> It is resolved as a keyed
-    /// <see cref="AIAgent"/> under <see cref="CbixWorkflowNodes.Triage"/>, and supplying it is the
-    /// host's job because constructing one means choosing a provider. A container missing it fails
-    /// loudly at the first resolution with a message naming the key, which is the correct failure for
-    /// a wiring mistake.
+    /// <see cref="IDocumentBoundAgentFactory"/> under <see cref="CbixWorkflowNodes.Triage"/>, and
+    /// supplying it is the host's job because constructing one means choosing a provider, a model tier
+    /// and a way of getting the document onto the wire. A container missing it fails loudly at the
+    /// first resolution with a message naming the key, which is the correct failure for a wiring
+    /// mistake.
+    /// </para>
+    /// <para>
+    /// <b>A host that has no provider-specific attachment to make need only register the keyed
+    /// <see cref="AIAgent"/>.</b> The default factory below adapts it, which is what lets S01-09's
+    /// agnosticism run - and every offline scenario - fill the slot with an <c>IChatClient</c> and
+    /// nothing else.
     /// </para>
     /// </remarks>
     public static IServiceCollection AddCbixWorkflow(
         this IServiceCollection services,
         DocumentIngestOptions ingestOptions,
-        DocumentPresentationOptions? presentationOptions = null)
+        DocumentPresentationOptions? presentationOptions = null,
+        TriageRoutingOptions? routingOptions = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(ingestOptions);
@@ -98,6 +113,7 @@ public static class CbixCoreServiceCollectionExtensions
         // cheap; a container whose behaviour depends on registration order is not.
         services.TryAddSingleton(ingestOptions);
         services.TryAddSingleton(presentationOptions ?? new DocumentPresentationOptions());
+        services.TryAddSingleton(routingOptions ?? new TriageRoutingOptions());
 
         // Process-wide by design. The registry is what makes a re-submission a duplicate, and dedupe
         // that only worked within one run would not be dedupe at all; the audit log is the trail
@@ -105,6 +121,12 @@ public static class CbixCoreServiceCollectionExtensions
         // lifetime is unchanged and the storage is not.
         services.TryAddSingleton<IDocumentRegistry, InMemoryDocumentRegistry>();
         services.TryAddSingleton<IIngestAuditLog, InMemoryIngestAuditLog>();
+
+        // Process-wide for the same reason, and more sharply: a queue scoped to the run that filled it
+        // would lose every row the moment that run ended, which is the one thing a review queue must
+        // not do. In-memory today, SQL-backed in Sprint 03 against db/schema/review_queue.sql; the
+        // lifetime does not change when the storage does.
+        services.TryAddSingleton<IReviewQueue, InMemoryReviewQueue>();
 
         // Stateless, and expensive enough to build that per-run construction would be waste: both hold
         // parser and native-renderer setup, neither holds anything about a document between calls.
@@ -161,13 +183,28 @@ public static class CbixCoreServiceCollectionExtensions
         // TryAdd throughout, for the same idempotence reason as the options above: the graph's nodes are
         // one-of-each services, and a duplicate registration would build a second set of executors that
         // nothing uses while the reader believed there was one.
+        // The neutral document-binding seam, and the last TryAdd in this method that a host is
+        // EXPECTED to have pre-empted. It adapts whatever keyed AIAgent is registered for the node into
+        // one that carries the run's prepared document as ordinary chat content - correct for the
+        // text-only and generic-vision profiles, and therefore correct for the whole agnosticism run.
+        // A provider whose document block cannot travel as chat content registers its own factory for
+        // the same key first (Anthropic's must; see ChatContentDocumentAgentFactory's remarks), and
+        // TryAdd is what makes "first registration wins" the rule rather than registration order being
+        // a coin toss.
+        services.TryAddKeyedScoped<IDocumentBoundAgentFactory>(
+            CbixWorkflowNodes.Triage,
+            (provider, key) => new ChatContentDocumentAgentFactory(
+                provider.GetRequiredKeyedService<AIAgent>(key)));
+
         services.TryAddScoped<DocumentIngestExecutor>();
         services.TryAddScoped(provider => new TriageExecutor(
-            provider.GetRequiredKeyedService<AIAgent>(CbixWorkflowNodes.Triage),
+            provider.GetRequiredKeyedService<IDocumentBoundAgentFactory>(CbixWorkflowNodes.Triage),
+            provider.GetRequiredService<IDocumentContentProvider>(),
             provider.GetRequiredService<ILogger<TriageExecutor>>()));
         services.TryAddScoped<SectionExtractionStubExecutor>();
         services.TryAddScoped<PersistStubExecutor>();
         services.TryAddScoped<DuplicateTerminalExecutor>();
+        services.TryAddScoped<ReviewQueueStubExecutor>();
         services.TryAddScoped<CbixWorkflowFactory>();
 
         return services;

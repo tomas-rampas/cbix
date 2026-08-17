@@ -80,6 +80,62 @@ public sealed class ClaudeDocumentAgentSeamTests : IDisposable
     }
 
     [Fact]
+    public async Task DocumentAgentFactory_AttachesNativeProfileContentThroughTheEscapeHatch()
+    {
+        // The per-node seam story S01-14 added, exercised on the path a real run takes: the host
+        // registers this factory against a graph node, the node hands it the run's prepared document,
+        // and what comes back has to be an agent that actually shows the model that document. Same
+        // wire-level assertion as the direct CreateDocumentAgent test above, because the failure it
+        // guards against is the same and is equally invisible everywhere else.
+        using Seam seam = await Seam.CreateAsync(this);
+
+        BoundDocumentAgent bound = seam.Factory
+            .CreateDocumentAgentFactory("triage", "Extract, never interpret.")
+            .CreateForDocument(seam.Document);
+
+        await RunAsync(bound);
+
+        JsonElement block = FindDocumentBlock(seam.Body());
+
+        Assert.Equal(seam.FileId, block.GetProperty("source").GetProperty("file_id").GetString());
+        Assert.Contains("files-api-2025-04-14", seam.Messages.BetaHeader!, StringComparison.Ordinal);
+        Assert.Contains("extended-cache-ttl-2025-04-11", seam.Messages.BetaHeader!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DocumentAgentFactory_SendsOtherProfilesContentAsOrdinaryChatContent()
+    {
+        // The configuration this branch exists for is a real one, not a hypothetical: an
+        // Anthropic-backed worker set to Vision or TextOnly presentation because an approved egress
+        // proxy blocks the Files API (design 8). That content is ordinary multimodal blocks, and
+        // forcing it through the escape hatch would refuse a supported deployment on its first
+        // document.
+        //
+        // Two assertions, and the second is the one that matters: no document block (there is no
+        // uploaded file to reference), and the page text genuinely on the wire. Asserting only the
+        // first would be satisfied by a request that carried nothing at all - which is exactly the
+        // silent failure the whole seam exists to prevent, arriving through the fallback door.
+        using Seam seam = await Seam.CreateAsync(this);
+
+        DocumentContent textOnly = new(
+            [new TextContent("--- Page 1 of 1 ---"), new TextContent("Contoso Bank country instruction")],
+            new DocumentContentCapabilities("text-only", includesVisualContent: false, isDegraded: true),
+            new DocumentContentHandle(seam.Document.Handle.DocumentId, "text-only", providerToken: null));
+
+        BoundDocumentAgent bound = seam.Factory
+            .CreateDocumentAgentFactory("triage", "Extract, never interpret.")
+            .CreateForDocument(textOnly);
+
+        await RunAsync(bound, "Identify this document.");
+
+        string body = seam.Messages.Body!;
+
+        Assert.DoesNotContain("\"type\":\"document\"", body, StringComparison.Ordinal);
+        Assert.Contains("Contoso Bank country instruction", body, StringComparison.Ordinal);
+        Assert.Contains("Identify this document.", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DocumentAgent_PlacesTheDocumentBeforeTheCallersTurn()
     {
         // Order is load-bearing, not cosmetic: a prompt cache matches on a prefix, so a document that

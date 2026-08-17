@@ -55,6 +55,19 @@ public sealed class ExtractionRunOutcome
                 nameof(sectionCount));
         }
 
+        // The same reasoning one branch further along, and worth its own check rather than being folded
+        // into the one above: a document routed to review was routed there INSTEAD of into extraction,
+        // so a non-zero count means the routing edge fired and the section agents ran anyway - the
+        // document queued for a human and paid for twice, reported as if the gate had worked.
+        if (disposition == ExtractionRunDisposition.ReviewQueued && sectionCount != 0)
+        {
+            throw new ArgumentException(
+                $"A document queued for review cannot report {sectionCount} extracted sections: the "
+                    + "routing edge sends it to a human instead of to the section agents, so a non-zero "
+                    + "count means both ran.",
+                nameof(sectionCount));
+        }
+
         Document = document;
         Disposition = disposition;
         SectionCount = sectionCount;

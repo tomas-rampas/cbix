@@ -81,7 +81,14 @@ public sealed class BoundDocumentAgentTests
         AIAgent agent = new ChatClientAgent(new RecordingChatClient(), name: "docControl");
 
         Assert.Throws<ArgumentNullException>(() => new BoundDocumentAgent(null!, () => new AgentRunOptions()));
-        Assert.Throws<ArgumentNullException>(() => new BoundDocumentAgent(agent, null!));
+        Assert.Throws<ArgumentNullException>(() => new BoundDocumentAgent(agent, (Func<AgentRunOptions>)null!));
+
+        // The chat-attached overload (story S01-14) gets the same treatment. The null-typed literal is
+        // spelled out because both overloads take two arguments and `null!` alone is ambiguous - which
+        // is itself the reason to assert on both: a future refactor that collapsed them would have to
+        // decide what a null second argument means, and here it means the same thing either way.
+        Assert.Throws<ArgumentNullException>(() => new BoundDocumentAgent(null!, (IReadOnlyList<AIContent>)[new TextContent("page 1")]));
+        Assert.Throws<ArgumentNullException>(() => new BoundDocumentAgent(agent, (IReadOnlyList<AIContent>)null!));
     }
 
     [Theory]
@@ -132,10 +139,138 @@ public sealed class BoundDocumentAgentTests
         Assert.Equal(typeof(CbixWorkflowFactory).Assembly, typeof(BoundDocumentAgent).Assembly);
     }
 
+    [Fact]
+    public async Task RunAsync_PutsTheChatAttachedDocumentAheadOfThePrompt()
+    {
+        // The chat-attached path (story S01-14): the profiles Core can build present a document as
+        // ordinary AIContent, and ordinary content belongs in the turn rather than in provider run
+        // options. Two properties are asserted, and the ORDER is the one that costs money if it is
+        // wrong: a prompt cache keys on a prefix, so a turn whose document trailed its question would
+        // miss on every call while extracting perfectly well.
+        RecordingChatClient chatClient = new();
+
+        BoundDocumentAgent bound = new(
+            new ChatClientAgent(chatClient, name: "triage"),
+            (IReadOnlyList<AIContent>)[new TextContent("--- Page 1 of 1 ---"), new TextContent("page text")]);
+
+        await bound.RunAsync("Identify this document.");
+
+        ChatMessage sent = Assert.Single(chatClient.ObservedMessages);
+
+        Assert.Equal(ChatRole.User, sent.Role);
+        Assert.Equal(
+            ["--- Page 1 of 1 ---", "page text", "Identify this document."],
+            sent.Contents.OfType<TextContent>().Select(text => text.Text));
+    }
+
+    [Fact]
+    public async Task RunAsync_BuildsAFreshChatAttachedTurnPerCall()
+    {
+        // One prepared document is shared by the concurrent section fan-out, so a binding that mutated
+        // or reused one message list would have six agents writing into what the seventh is reading.
+        // The blocks themselves are shared deliberately - copying page images per call would be the
+        // opposite mistake - so what has to be per-call is the list, and this is what says so.
+        RecordingChatClient chatClient = new();
+
+        BoundDocumentAgent bound = new(
+            new ChatClientAgent(chatClient, name: "triage"),
+            (IReadOnlyList<AIContent>)[new TextContent("page text")]);
+
+        await bound.RunAsync("first question");
+        await bound.RunAsync("second question");
+
+        Assert.Equal(2, chatClient.ObservedMessages.Count);
+        Assert.NotSame(chatClient.ObservedMessages[0], chatClient.ObservedMessages[1]);
+        Assert.Equal(
+            ["page text", "first question"],
+            chatClient.ObservedMessages[0].Contents.OfType<TextContent>().Select(text => text.Text));
+        Assert.Equal(
+            ["page text", "second question"],
+            chatClient.ObservedMessages[1].Contents.OfType<TextContent>().Select(text => text.Text));
+    }
+
+    [Fact]
+    public void Constructor_RefusesAnEmptyOrHollowChatAttachedDocument()
+    {
+        // An empty block list produces a call that reads as document-carrying and shows the model
+        // nothing - the exact failure this type exists to make impossible, arriving through the door
+        // the type itself opened.
+        AIAgent agent = new ChatClientAgent(new RecordingChatClient(), name: "triage");
+
+        Assert.Throws<ArgumentException>(() => new BoundDocumentAgent(agent, (IReadOnlyList<AIContent>)[]));
+        Assert.Throws<ArgumentException>(() => new BoundDocumentAgent(agent, (IReadOnlyList<AIContent>)[null!]));
+    }
+
+    [Fact]
+    public void Constructor_RefusesABlockWhoseOnlyPayloadIsAProviderRawRepresentation()
+    {
+        // MEASURED, and it is the whole reason this guard exists. `new AIContent { RawRepresentation
+        // = ... }` is exactly what the Claude native-PDF profile produces, and it is the shape MAF was
+        // measured silently DROPPING from a chat turn. Without this check that content passed every
+        // other test here, the request went out with no document in it, the model answered fluently
+        // about a document it had never seen, and triage reported a profile ABOVE the review
+        // threshold - so nothing failed, nothing was logged, and no human was ever asked.
+        //
+        // The exact-type comparison is the substance: a block with no neutral payload is the only one
+        // a chat turn genuinely cannot express, and every derived type has one.
+        AIAgent agent = new ChatClientAgent(new RecordingChatClient(), name: "triage");
+
+        AIContent rawOnly = new() { RawRepresentation = new object() };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => new BoundDocumentAgent(agent, (IReadOnlyList<AIContent>)[rawOnly]));
+
+        Assert.Equal("documentBlocks", error.ParamName);
+        Assert.Contains("no neutral content", error.Message, StringComparison.Ordinal);
+
+        // It refuses a raw-only block anywhere in the list, not merely as the first one: a vision
+        // profile's text-then-image sequence with one provider block spliced in is the realistic
+        // shape, and checking only the head would pass it.
+        Assert.Throws<ArgumentException>(() => new BoundDocumentAgent(
+            agent,
+            (IReadOnlyList<AIContent>)[new TextContent("page text"), rawOnly]));
+    }
+
+    [Fact]
+    public void Constructor_StillAcceptsBlocksThatCarryBothNeutralContentAndARawRepresentation()
+    {
+        // The guard must not become "refuses anything with a RawRepresentation". A TextContent or a
+        // DataContent that also carries a provider payload has something a chat turn can express, so
+        // it travels fine - and refusing it would break the vision and text-only profiles, which are
+        // the whole agnosticism fallback.
+        AIAgent agent = new ChatClientAgent(new RecordingChatClient(), name: "triage");
+
+        TextContent annotated = new("page text") { RawRepresentation = new object() };
+
+        BoundDocumentAgent bound = new(agent, (IReadOnlyList<AIContent>)[annotated]);
+
+        Assert.Same(agent, bound.Agent);
+    }
+
+    [Fact]
+    public async Task RunAsync_LeavesTheOutputCapUnsetOnTheChatAttachedPath()
+    {
+        // The narrow claim this recorder can support: nothing on the chat-attached path sets an output
+        // cap, so whatever the agent was built with governs. It is NOT a claim that no options object
+        // reaches the client - the recorder observes MaxOutputTokens, not the presence of options, and
+        // an earlier version of this comment overstated it. What it pins is the property that matters
+        // here: this path adds nothing per call, so there is nothing per call for a holder to corrupt.
+        RecordingChatClient chatClient = new();
+
+        BoundDocumentAgent bound = new(
+            new ChatClientAgent(chatClient, name: "triage"),
+            (IReadOnlyList<AIContent>)[new TextContent("page text")]);
+
+        await bound.RunAsync("a question");
+
+        Assert.Empty(chatClient.ObservedMaxOutputTokens);
+    }
+
     /// <summary>A chat client that records the output cap it was asked for and answers minimally.</summary>
     private sealed class RecordingChatClient : IChatClient
     {
         private readonly List<int> _observed = [];
+        private readonly List<ChatMessage> _messages = [];
 
         internal IReadOnlyList<int> ObservedMaxOutputTokens
         {
@@ -144,6 +279,22 @@ public sealed class BoundDocumentAgentTests
                 lock (_observed)
                 {
                     return [.. _observed];
+                }
+            }
+        }
+
+        /// <summary>Gets the user turns the client was asked to send, in order.</summary>
+        /// <remarks>
+        /// Only user turns: a <c>ChatClientAgent</c> prepends its own system instructions, and a test
+        /// asserting on "the first message" would be asserting on whether the agent had instructions.
+        /// </remarks>
+        internal IReadOnlyList<ChatMessage> ObservedMessages
+        {
+            get
+            {
+                lock (_messages)
+                {
+                    return [.. _messages];
                 }
             }
         }
@@ -159,6 +310,11 @@ public sealed class BoundDocumentAgentTests
                 {
                     _observed.Add(cap);
                 }
+            }
+
+            lock (_messages)
+            {
+                _messages.AddRange((messages ?? []).Where(message => message.Role == ChatRole.User));
             }
 
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));

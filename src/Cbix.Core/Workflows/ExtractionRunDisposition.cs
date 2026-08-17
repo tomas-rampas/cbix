@@ -38,4 +38,24 @@ public enum ExtractionRunDisposition
     /// documents and an operator counting completed runs are asking different questions.
     /// </remarks>
     DuplicateIgnored = 1,
+
+    /// <summary>
+    /// The pipeline would not vouch for the document, so it was queued for a human instead of
+    /// extracted (design 5.7, design 9 "New/unknown layout family").
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Also a success, and for a sharper reason than the duplicate above: this is the pipeline
+    /// declining to guess, which is the behaviour the whole design is built around. A run that reaches
+    /// here has cost one cheap triage call and no extraction, which is exactly what the routing edge
+    /// exists to achieve.
+    /// </para>
+    /// <para>
+    /// Distinct from <see cref="Persisted"/> because an operator counting published documents and an
+    /// operator counting completed runs are asking different questions - and distinct from a failure
+    /// because nothing failed. Design 9 lists an unrecognised document as a handled case; reporting it
+    /// as an error would train operators to ignore errors.
+    /// </para>
+    /// </remarks>
+    ReviewQueued = 2,
 }

@@ -38,8 +38,20 @@ public sealed class MinimalWorkflowTopologySteps(MinimalWorkflowTopologyState st
     /// <summary>The specimen named by the story's Gherkin, relative to the repository's data directory.</summary>
     private const string SpecimenFileName = RepositoryLayout.DeSpecimenFileName;
 
-    /// <summary>What the canned model answers triage with.</summary>
-    private const string CannedTriageAnswer = "Cross-border trading legal instruction, DE.";
+    /// <summary>
+    /// What the canned model answers triage with: a structured-output payload in design Appendix A's
+    /// <c>DocumentProfile</c> shape.
+    /// </summary>
+    /// <remarks>
+    /// <b>It was prose until story S01-14, and the change is not cosmetic.</b> Triage now parses its
+    /// reply strictly against that contract, so a prose answer is refused and the document is routed to
+    /// review instead of to extraction (S01-15). This feature is about the topology's happy path -
+    /// ingest, triage, the downstream slot, persist - so its canned reply has to be one triage accepts,
+    /// with a confidence above the routing threshold. A scenario left on prose would still have gone
+    /// green here and then quietly stopped exercising the spine the moment the routing edges landed.
+    /// </remarks>
+    private const string CannedTriageAnswer =
+        """{"DocType":"Cross-Border Trading Legal Instruction","JurisdictionIso":"DE","DocRef":"CBTI-DE-2024","Version":"4.2","LayoutFamily":"contoso-country-manual-v4","Confidence":0.96}""";
 
     [Given("the DE specimen submitted to the workflow")]
     public void GivenTheDeSpecimenSubmittedToTheWorkflow() => Compose();

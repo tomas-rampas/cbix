@@ -29,6 +29,17 @@ public static class RepositoryLayout
     /// <summary>The DE country instruction specimen (design's golden set v0 input).</summary>
     public const string DeSpecimenFileName = "Cross_Border_Trading_Legal_Instruction_DE_SPECIMEN.pdf";
 
+    /// <summary>
+    /// The CH country instruction specimen (design's golden set v0 input).
+    /// </summary>
+    /// <remarks>
+    /// The second specimen is not a spare copy of the first. Its categorisation scheme is FinSA's
+    /// three categories against DE's four MiFID II ones, deliberately, so that anything keyed on the
+    /// DE shape - a hard-coded cell count, a jurisdiction inferred from a layout family - fails on it
+    /// rather than passing by coincidence. Triage is the first story that reads both.
+    /// </remarks>
+    public const string ChSpecimenFileName = "Cross_Border_Trading_Legal_Instruction_CH_SPECIMEN.pdf";
+
     /// <summary>Gets the repository's <c>data</c> directory: the ingest root the scenarios use.</summary>
     /// <returns>The fully qualified path.</returns>
     public static string DataDirectory() => Path.Combine(Root(), "data");
@@ -40,6 +51,17 @@ public static class RepositoryLayout
         string path = Path.Combine(DataDirectory(), DeSpecimenFileName);
 
         Assert.True(File.Exists(path), $"The DE specimen is missing from the repository at '{path}'.");
+
+        return path;
+    }
+
+    /// <summary>Gets the fully qualified path of the CH specimen, asserting that it is present.</summary>
+    /// <returns>The fully qualified path.</returns>
+    public static string ChSpecimenPath()
+    {
+        string path = Path.Combine(DataDirectory(), ChSpecimenFileName);
+
+        Assert.True(File.Exists(path), $"The CH specimen is missing from the repository at '{path}'.");
 
         return path;
     }

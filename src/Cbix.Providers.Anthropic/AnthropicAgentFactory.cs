@@ -366,6 +366,51 @@ public sealed class AnthropicAgentFactory : IDisposable
     }
 
     /// <summary>
+    /// Creates the per-node agent factory the workflow graph asks for by role.
+    /// </summary>
+    /// <param name="name">Agent name as used in the workflow graph (for example <c>triage</c>).</param>
+    /// <param name="instructions">The agent's system instructions.</param>
+    /// <param name="modelId">
+    /// Exact, dated model snapshot, or <see langword="null"/> for
+    /// <see cref="AnthropicProviderOptions.ModelId"/> - which is the Haiku tier design 7 assigns to
+    /// triage and to six of the seven section agents. The Matrix agent names Sonnet here.
+    /// </param>
+    /// <param name="maxOutputTokens">Per-response output cap, or <see langword="null"/> for the configured default.</param>
+    /// <returns>
+    /// Core's neutral seam. The declared type belongs to <c>Cbix.Core</c>, so the host registers this
+    /// against a graph node without the graph gaining any knowledge of a provider - which is the whole
+    /// of "a provider swap is configuration, not code" as it applies to agents.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the registration a host makes instead of a bare <c>AIAgent</c>, and the difference
+    /// is the document.</b> An agent registered on its own can only be run without one, and a triage
+    /// or section call made without the document is a model answering fluently about something it was
+    /// never shown. Handing the graph a factory means the node cannot make that call even by mistake:
+    /// the only thing it can obtain is an agent that already has a document attached.
+    /// </para>
+    /// <para>
+    /// No I/O and no agent construction happen here - the returned factory builds an agent when a run
+    /// gives it a document - so registering one for every node in the graph costs nothing at startup.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> or <paramref name="instructions"/> is <see langword="null"/>, empty, or
+    /// white space.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The factory has been disposed.</exception>
+    public IDocumentBoundAgentFactory CreateDocumentAgentFactory(
+        string name,
+        string instructions,
+        string? modelId = null,
+        int? maxOutputTokens = null)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+        return new AnthropicDocumentBoundAgentFactory(this, name, instructions, modelId, maxOutputTokens);
+    }
+
+    /// <summary>
     /// Creates the Claude native-PDF document-content profile for one workflow run.
     /// </summary>
     /// <returns>

@@ -1,5 +1,6 @@
 using System.Globalization;
 
+using Cbix.Core.Agents;
 using Cbix.Core.Diagnostics;
 using Cbix.Core.Documents;
 using Cbix.Core.Hosting;
@@ -110,6 +111,18 @@ public static class CbixWorkerHostExtensions
     public const string DocumentPresentationKey = "Cbix:Provider:DocumentPresentation";
 
     /// <summary>
+    /// Configuration key carrying the confidence at or above which triage sends a document into
+    /// extraction rather than to a human.
+    /// </summary>
+    /// <remarks>
+    /// Provider-neutral by name and by section, like the presentation key above and unlike anything
+    /// under the Anthropic section: the threshold describes how much this deployment trusts triage, not
+    /// which vendor answers it. Design 11 expects the number to move once correction rates exist, and
+    /// this key is what makes that a configuration change.
+    /// </remarks>
+    public const string TriageReviewThresholdKey = "Cbix:Triage:ReviewConfidenceThreshold";
+
+    /// <summary>
     /// Registers the worker's services: the clock, the secret resolver, the Anthropic agent factory
     /// and the background service.
     /// </summary>
@@ -169,23 +182,39 @@ public static class CbixWorkerHostExtensions
         builder.Services.AddSingleton<IDocumentContentProfileSource, ClaudeDocumentContentProfileSource>();
 
         // The agents Core's graph asks for by role. Keyed rather than named-by-type because the graph
-        // will hold nine of them by Sprint 02 and they are all AIAgent; the key IS the role.
+        // will hold nine of them by Sprint 02 and they are all the same abstraction; the key IS the
+        // role.
         //
-        // Singleton, not scoped. An agent is a stateless caller over the factory's pooled client - the
-        // per-run state lives in the document-content provider, which is scoped - so a per-run agent
-        // would allocate for nothing. Resolved lazily inside the lambda so that composing a host
-        // without ever running the workflow (which every credential test does) makes no agent at all.
-        builder.Services.AddKeyedSingleton<AIAgent>(
+        // A FACTORY rather than a bare AIAgent, and story S01-14 is where that changed. An agent
+        // registered on its own can only be run without a document - and a triage call made without
+        // the document is a model identifying something it was never shown, answering fluently, with
+        // nothing in the run to say so. Registering the factory means the node's only way to obtain an
+        // agent already has this run's document attached, and how that document reaches the wire
+        // (Claude's escape hatch, or ordinary chat content when a proxy forces a degraded
+        // presentation) is settled inside the adapter rather than at the node.
+        //
+        // Singleton, not scoped. The factory is a stateless caller over the adapter's pooled client -
+        // the per-run state lives in the document-content provider, which is scoped, and in the
+        // per-document binding the factory hands out. Resolved lazily inside the lambda so that
+        // composing a host without ever running the workflow (which every credential test does)
+        // constructs nothing.
+        builder.Services.AddKeyedSingleton<IDocumentBoundAgentFactory>(
             CbixWorkflowNodes.Triage,
-            (serviceProvider, _) => serviceProvider.GetRequiredService<AnthropicAgentFactory>().CreateAgent(
-                name: CbixWorkflowNodes.Triage,
-                instructions: TriageInstructions));
+            (serviceProvider, _) => serviceProvider.GetRequiredService<AnthropicAgentFactory>()
+                .CreateDocumentAgentFactory(
+                    name: CbixWorkflowNodes.Triage,
+
+                    // No model named, which IS the tiering decision: the configured default is the
+                    // Haiku snapshot design 7 assigns to triage. Naming it again here would be a second
+                    // place for the tier to drift from the pin.
+                    instructions: TriageInstructions));
 
         // Core's half: the ingest stack, the local document-content profiles and the workflow graph.
         // Everything above is what this call cannot decide for itself.
         builder.Services.AddCbixWorkflow(
             ReadIngestOptions(builder.Configuration, builder.Environment.ContentRootPath),
-            ReadDocumentPresentationOptions(builder.Configuration));
+            ReadDocumentPresentationOptions(builder.Configuration),
+            ReadTriageRoutingOptions(builder.Configuration));
 
         // Scope validation, in PRODUCTION and not only in tests. Measured: with the default provider
         // options a scoped service resolved from the root container is silently promoted to a
@@ -373,18 +402,29 @@ public static class CbixWorkerHostExtensions
     }
 
     /// <summary>
-    /// The triage agent's system instructions until story S01-14 supplies the real ones.
+    /// The triage agent's system instructions: the uniform extraction prompting rules and nothing
+    /// else.
     /// </summary>
     /// <remarks>
-    /// It states the uniform extraction prompting rules (CLAUDE.md) and nothing else. S01-14 adds
-    /// triage's own contract - the <c>DocumentProfile</c> schema of design Appendix A, the layout
-    /// families, the routing threshold - and pins the model tier (Haiku, design 7). A placeholder that
-    /// broke the uniform rules would be the version somebody copied into the next agent.
+    /// <para>
+    /// <b>The split between these and the turn triage sends is deliberate.</b> These are the rules
+    /// every CBIX agent obeys (CLAUDE.md), stated once at the place where an agent is constructed -
+    /// which is here, because constructing one means choosing a provider. Triage's own contract - the
+    /// <c>DocumentProfile</c> fields, the UNKNOWN convention, the JSON-only requirement - lives on the
+    /// turn, in <c>Cbix.Core</c>'s <c>TriageExecutor</c>, because it is provider-independent and
+    /// because it has to be built from the same field list the parser enforces.
+    /// </para>
+    /// <para>
+    /// The model tier is not named here either: the configured default is the Haiku snapshot design 7
+    /// assigns to triage, and naming it a second time would be a second place for it to drift from
+    /// the pin.
+    /// </para>
     /// </remarks>
     private const string TriageInstructions =
-        "Extract, never interpret. Copy snippets verbatim. Return null for absent fields - never "
-            + "invent. Use only the supplied document. Report page numbers as they are shown in a PDF "
-            + "viewer.";
+        "You identify cross-border trading legal instruction documents. Extract, never interpret. "
+            + "Copy values verbatim. Use only the supplied document. Report page numbers as they are "
+            + "shown in a PDF viewer. Never guess at a document you do not recognise: say so instead, "
+            + "in the form the turn asks for.";
 
     /// <summary>Reads the ingest gate's settings, defaulting the root under the content root.</summary>
     /// <remarks>
@@ -414,6 +454,46 @@ public static class CbixWorkerHostExtensions
             : DocumentIngestOptions.ClaudeFilesApiLimitBytes;
 
         return new DocumentIngestOptions(Path.GetFullPath(root), maxBytes);
+    }
+
+    /// <summary>Reads where triage's review edge sits.</summary>
+    /// <remarks>
+    /// <para>
+    /// Read here rather than defaulted in Core because it is a deployment decision, and a decision the
+    /// first pilot batch is expected to change: design 11 says confidence thresholds are calibrated
+    /// against observed correction rates, and nobody has those rates yet. Making it configuration is
+    /// what turns that recalibration into an edit to a config map rather than a release.
+    /// </para>
+    /// <para>
+    /// Parsed strictly and invariantly. Strictly for the same reason as the presentation capability: a
+    /// typo that fell back to the default would move the review gate without saying so, and the only
+    /// symptom would be documents extracted that should have been queued - which nobody reports,
+    /// because everything still gets done. Invariantly because a decimal comma on a German-locale host
+    /// would parse "0,9" as 9 on one machine and fail on another, and a threshold that depends on the
+    /// host's locale is not a threshold.
+    /// </para>
+    /// <para>
+    /// Range validation is left to <see cref="TriageRoutingOptions"/>, which owns it: a value outside
+    /// the unit interval disables the gate in one direction or the other, and the refusal belongs with
+    /// the invariant rather than duplicated at every reader.
+    /// </para>
+    /// </remarks>
+    private static TriageRoutingOptions ReadTriageRoutingOptions(IConfiguration configuration)
+    {
+        if (configuration[TriageReviewThresholdKey] is not { Length: > 0 } configured)
+        {
+            return new TriageRoutingOptions();
+        }
+
+        if (!double.TryParse(configured, NumberStyles.Float, CultureInfo.InvariantCulture, out double threshold))
+        {
+            throw new InvalidOperationException(
+                $"Configuration key '{TriageReviewThresholdKey}' is '{ForMessage(configured)}', which is not "
+                    + "a number. It is the confidence at or above which a document is extracted rather than "
+                    + "queued for a human, so a value that cannot be read is a gate that cannot be placed.");
+        }
+
+        return new TriageRoutingOptions(threshold);
     }
 
     /// <summary>Reads the configured provider's document-presentation capability.</summary>

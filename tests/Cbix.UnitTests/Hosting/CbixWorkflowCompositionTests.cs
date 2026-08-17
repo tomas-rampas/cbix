@@ -1,6 +1,8 @@
+using Cbix.Core.Agents;
 using Cbix.Core.Documents;
 using Cbix.Core.Hosting;
 using Cbix.Core.Ingest;
+using Cbix.Core.Review;
 using Cbix.Core.Workflows;
 
 using Cbix.UnitTests.Providers;
@@ -102,6 +104,7 @@ public sealed class CbixWorkflowCompositionTests : IDisposable
                 typeof(SectionExtractionStubExecutor),
                 typeof(PersistStubExecutor),
                 typeof(DuplicateTerminalExecutor),
+                typeof(ReviewQueueStubExecutor),
                 typeof(CbixWorkflowFactory),
             ])
         {
@@ -111,6 +114,89 @@ public sealed class CbixWorkflowCompositionTests : IDisposable
 
             Assert.Equal(ServiceLifetime.Scoped, descriptor.Lifetime);
         }
+    }
+
+    [Fact]
+    public void AddCbixWorkflow_KeepsTheReviewQueueProcessWide()
+    {
+        // The sharpest case of the process-wide rule: a queue scoped to the run that filled it would
+        // lose every row the moment that run ended, which is the one thing a review queue must not do.
+        // Asserted across two scopes rather than by reading the descriptor, because what matters is
+        // that a row survives the run - not how the registration is spelled.
+        using ServiceProvider container = ComposeCore(DocumentPresentationCapability.TextOnly);
+
+        using IServiceScope firstRun = container.CreateScope();
+        using IServiceScope secondRun = container.CreateScope();
+
+        Assert.Same(
+            firstRun.ServiceProvider.GetRequiredService<IReviewQueue>(),
+            secondRun.ServiceProvider.GetRequiredService<IReviewQueue>());
+    }
+
+    [Fact]
+    public void AddCbixWorkflow_DefaultsTheRoutingThresholdAndLetsAHostOverrideIt()
+    {
+        // The threshold is a deployment decision design 11 expects to move once correction rates exist,
+        // so two properties matter: an unconfigured composition gets the documented default, and a host
+        // that supplies one wins. The second is what makes recalibration a config change rather than a
+        // release, and TryAdd is what makes "the host's registration wins" a rule rather than a
+        // function of ordering.
+        using ServiceProvider defaulted = ComposeCore(DocumentPresentationCapability.TextOnly);
+
+        Assert.Equal(
+            TriageRoutingOptions.DefaultReviewConfidenceThreshold,
+            defaulted.GetRequiredService<TriageRoutingOptions>().ReviewConfidenceThreshold);
+
+        ServiceCollection services = [];
+        services.AddLogging();
+        services.AddCbixWorkflow(
+            new DocumentIngestOptions(CreateTemporaryDirectory(), DocumentIngestOptions.ClaudeFilesApiLimitBytes),
+            new DocumentPresentationOptions(DocumentPresentationCapability.TextOnly),
+            new TriageRoutingOptions(0.42d));
+
+        using ServiceProvider configured = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+        });
+
+        Assert.Equal(0.42d, configured.GetRequiredService<TriageRoutingOptions>().ReviewConfidenceThreshold);
+    }
+
+    [Fact]
+    public void AddCbixWorker_ReadsTheTriageReviewThresholdFromConfiguration()
+    {
+        // End to end through the real host entry point: a key in configuration, a threshold in the
+        // container, no code change anywhere between.
+        using IHost host = ComposeHost((CbixWorkerHostExtensions.TriageReviewThresholdKey, "0.55"));
+
+        Assert.Equal(
+            0.55d,
+            host.Services.GetRequiredService<TriageRoutingOptions>().ReviewConfidenceThreshold);
+    }
+
+    [Fact]
+    public void AddCbixWorker_ReadsTheTriageReviewThresholdInvariantlyAndStrictly()
+    {
+        // Two failures that would otherwise be silent, and both are locale- or typo-shaped rather than
+        // exotic. "0,55" is what a German-locale host writes: parsed under the ambient culture it is
+        // 0.55 on one machine and refused on another, so a threshold read that way depends on where it
+        // runs. Read invariantly it is refused everywhere, identically - which is the property worth
+        // having, and it is also why the refusal below is "not a number" rather than "out of range".
+        // "high" is the typo case: a value that fell back to the default would move the review gate
+        // without saying so, and the only symptom would be documents extracted that should have been
+        // queued.
+        foreach (string configured in (string[])["0,55", "high"])
+        {
+            InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+                () => ComposeHost((CbixWorkerHostExtensions.TriageReviewThresholdKey, configured)).Dispose());
+
+            Assert.Contains(configured, error.Message, StringComparison.Ordinal);
+        }
+
+        // A number that parses but disables the gate is refused too, by the options type that owns the
+        // invariant rather than by a duplicate check at the reader.
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ComposeHost((CbixWorkerHostExtensions.TriageReviewThresholdKey, "1.5")).Dispose());
     }
 
     [Fact]
@@ -434,17 +520,28 @@ public sealed class CbixWorkflowCompositionTests : IDisposable
     }
 
     [Fact]
-    public void AddCbixWorker_RegistersTheTriageAgentUnderItsRoleKey()
+    public void AddCbixWorker_RegistersTheTriageAgentFactoryUnderItsRoleKey()
     {
-        // The seam S01-14 fills. Core's graph asks for an AIAgent keyed by role and never learns which
-        // provider answered; the host is what answers. Resolving it here also proves the registration
-        // is reachable without running the workflow - a keyed registration nobody can resolve is a
-        // wiring mistake that would otherwise surface inside the first superstep of a real run.
+        // The seam S01-14 filled, and it moved: the host now registers an IDocumentBoundAgentFactory
+        // rather than a bare AIAgent. That is the point of the story rather than a detail of it - an
+        // agent registered on its own can only be run WITHOUT a document, and a triage call with no
+        // document is a model identifying something it was never shown. Core's graph still asks by role
+        // and still never learns which provider answered.
+        //
+        // Resolving it here also proves the registration is reachable without running the workflow: a
+        // keyed registration nobody can resolve is a wiring mistake that would otherwise surface inside
+        // the first superstep of a real run.
         using IHost host = ComposeHost();
 
-        AIAgent agent = host.Services.GetRequiredKeyedService<AIAgent>(CbixWorkflowNodes.Triage);
+        IDocumentBoundAgentFactory factory =
+            host.Services.GetRequiredKeyedService<IDocumentBoundAgentFactory>(CbixWorkflowNodes.Triage);
 
-        Assert.Equal(CbixWorkflowNodes.Triage, agent.Name);
+        // By type NAME rather than by Assert.IsType, because the adapter's implementation is internal
+        // to it and naming it here would be this test asserting through a type the graph is forbidden
+        // to name. What matters is that the HOST's registration won over Core's chat-content default:
+        // if Core's had won, the Claude document block would never reach the wire.
+        Assert.Equal("AnthropicDocumentBoundAgentFactory", factory.GetType().Name);
+        Assert.NotEqual(typeof(ChatContentDocumentAgentFactory), factory.GetType());
     }
 
     /// <summary>Removes any temporary ingest roots the tests created.</summary>

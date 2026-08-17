@@ -96,6 +96,17 @@ public static class CbixEventIds
     /// <summary>A run reached the persist step.</summary>
     public const int WorkflowRunCompleted = 1023;
 
+    /// <summary>Triage parsed a reply into a <c>DocumentProfile</c> (design 5.3).</summary>
+    public const int WorkflowDocumentProfiled = 1024;
+
+    /// <summary>
+    /// Triage refused an agent's reply because it did not match the <c>DocumentProfile</c> contract.
+    /// </summary>
+    public const int WorkflowTriageReplyRefused = 1025;
+
+    /// <summary>A run was routed to the review queue instead of into extraction (design 9).</summary>
+    public const int WorkflowRunRoutedToReview = 1026;
+
     // ---------------------------------------------------------------------------------------------
     // 1040-1059: host composition and startup.
     // ---------------------------------------------------------------------------------------------

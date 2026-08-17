@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 
 namespace Cbix.Bdd.Support;
 
@@ -14,19 +15,38 @@ namespace Cbix.Bdd.Support;
 /// </remarks>
 public sealed class CapturingMessagesHandler : DelegatingHandler
 {
-    private const string CannedResponse = """
-        {"id":"msg_bdd_canned","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001",
-         "content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
-         "usage":{"input_tokens":1,"output_tokens":1}}
-        """;
+    private const string DefaultAssistantText = "ok";
 
     private readonly bool _forwards;
+    private readonly string _assistantText = DefaultAssistantText;
 
     private int _requestCount;
 
     /// <summary>Initialises a handler that answers locally with a canned message.</summary>
     public CapturingMessagesHandler()
     {
+    }
+
+    /// <summary>Initialises a handler that answers locally with a caller-supplied assistant reply.</summary>
+    /// <param name="assistantText">The text the canned assistant message carries.</param>
+    /// <remarks>
+    /// <para>
+    /// Added for the triage wire scenario, which asserts two things about one call: that the
+    /// document block and its beta opt-ins reached the wire, and that the reply was parsed by the
+    /// production parser into a <c>DocumentProfile</c>. The default "ok" satisfies the first and
+    /// defeats the second, so a scenario that needs both has to be able to say what the model said.
+    /// </para>
+    /// <para>
+    /// The text is JSON-escaped into the canned response body, so a structured-output payload -
+    /// which is full of quote characters - survives being embedded in one.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="assistantText"/> is <see langword="null"/>.</exception>
+    public CapturingMessagesHandler(string assistantText)
+    {
+        ArgumentNullException.ThrowIfNull(assistantText);
+
+        _assistantText = assistantText;
     }
 
     /// <summary>Initialises a handler that records and then forwards to the real API.</summary>
@@ -82,7 +102,20 @@ public sealed class CapturingMessagesHandler : DelegatingHandler
 
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(CannedResponse, Encoding.UTF8, "application/json"),
+            Content = new StringContent(BuildResponse(), Encoding.UTF8, "application/json"),
         };
     }
+
+    /// <summary>Builds a Messages API response in the shape the SDK deserialises.</summary>
+    private string BuildResponse() =>
+        JsonSerializer.Serialize(new
+        {
+            id = "msg_bdd_canned",
+            type = "message",
+            role = "assistant",
+            model = "claude-haiku-4-5-20251001",
+            content = new[] { new { type = "text", text = _assistantText } },
+            stop_reason = "end_turn",
+            usage = new { input_tokens = 1, output_tokens = 1 },
+        });
 }

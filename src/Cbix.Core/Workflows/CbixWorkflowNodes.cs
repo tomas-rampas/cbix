@@ -33,6 +33,17 @@ public static class CbixWorkflowNodes
     public const string Persist = "persist";
 
     /// <summary>
+    /// The review-queue node: where a document the pipeline will not vouch for ends its run
+    /// (design 5.7, design 9 "New/unknown layout family").
+    /// </summary>
+    /// <remarks>
+    /// A terminal in Sprint 01 and deliberately not one afterwards. Sprint 03's HITL work turns it into
+    /// a checkpointed pause over MAF's request/response ports, from which an approved or corrected
+    /// document continues to persist - so the node id stays and what hangs off it changes.
+    /// </remarks>
+    public const string Review = "review";
+
+    /// <summary>
     /// The terminal node for a re-submission, whose run stops at the registry (design 5.1).
     /// </summary>
     /// <remarks>

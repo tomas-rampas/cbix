@@ -1,6 +1,9 @@
 using System.Reflection;
 
+using Cbix.Core.Agents;
+using Cbix.Core.Documents;
 using Cbix.Core.Ingest;
+using Cbix.Core.Review;
 using Cbix.Core.Workflows;
 
 using Microsoft.Agents.AI;
@@ -50,6 +53,7 @@ public sealed class CbixWorkflowFactoryTests
                 CbixWorkflowNodes.DuplicateTerminal,
                 CbixWorkflowNodes.Ingest,
                 CbixWorkflowNodes.Persist,
+                CbixWorkflowNodes.Review,
                 CbixWorkflowNodes.SectionExtraction,
                 CbixWorkflowNodes.Triage,
             ],
@@ -64,13 +68,16 @@ public sealed class CbixWorkflowFactoryTests
         Assert.Equal(
             [CbixWorkflowNodes.DuplicateTerminal, CbixWorkflowNodes.Triage],
             SinksOf(workflow, CbixWorkflowNodes.Ingest));
-        Assert.Equal([CbixWorkflowNodes.SectionExtraction], SinksOf(workflow, CbixWorkflowNodes.Triage));
+        Assert.Equal(
+            [CbixWorkflowNodes.Review, CbixWorkflowNodes.SectionExtraction],
+            SinksOf(workflow, CbixWorkflowNodes.Triage));
         Assert.Equal([CbixWorkflowNodes.Persist], SinksOf(workflow, CbixWorkflowNodes.SectionExtraction));
 
-        // Both terminals are terminal. A node with an outgoing edge is not an end state, and the whole
-        // point of the duplicate branch is that it ENDS somewhere observable.
+        // Every terminal is terminal. A node with an outgoing edge is not an end state, and the whole
+        // point of the duplicate and review branches is that they END somewhere observable.
         Assert.Empty(SinksOf(workflow, CbixWorkflowNodes.Persist));
         Assert.Empty(SinksOf(workflow, CbixWorkflowNodes.DuplicateTerminal));
+        Assert.Empty(SinksOf(workflow, CbixWorkflowNodes.Review));
     }
 
     [Fact]
@@ -160,18 +167,55 @@ public sealed class CbixWorkflowFactoryTests
     }
 
     [Fact]
-    public void Build_LeavesTriageWithAnUnconditionalEdgeForStoryS0115ToSplit()
+    public void Build_GivesTriageExactlyTwoConditionalEdges()
     {
-        // Pins the starting point rather than the destination. S01-15 turns this single unconditional
-        // edge into two conditional ones - onward, and to the review queue below the routing threshold
-        // - and this test failing is the correct, expected signal that it did so. Its value is now:
-        // nothing today silently routes on a confidence nobody has computed yet.
+        // The S01-15 split, and the replacement for the test that pinned the unconditional edge this
+        // one supersedes. That test's own comment said its failure would be the expected signal that
+        // the edge had been split; this is what the signal was for.
+        //
+        // TWO edges, both conditional, is the specific shape - the same arrangement ingest uses, for
+        // the same reason. One conditional edge would leave a document that failed the predicate
+        // matching nothing at all: the run would go quiet, no outcome would be emitted, and "the
+        // pipeline declined to vouch for this" and "the run stalled" would be the same observation.
+        // An unconditional edge would send every document to extraction on a confidence nobody
+        // consulted, which is exactly what design 9 says must not happen.
         Workflow workflow = BuildWorkflow();
 
-        DirectEdgeInfo edge = Assert.IsType<DirectEdgeInfo>(
-            Assert.Single(workflow.ReflectEdges()[CbixWorkflowNodes.Triage]));
+        List<DirectEdgeInfo> edges =
+        [
+            .. workflow.ReflectEdges()[CbixWorkflowNodes.Triage].Select(Assert.IsType<DirectEdgeInfo>),
+        ];
 
-        Assert.False(edge.HasCondition);
+        Assert.Equal(2, edges.Count);
+        Assert.All(
+            edges,
+            edge => Assert.True(
+                edge.HasCondition,
+                "An edge out of triage carries no condition, so every document - including ones triage "
+                    + "could not identify - would take it."));
+
+        Assert.Equal(
+            [CbixWorkflowNodes.Review, CbixWorkflowNodes.SectionExtraction],
+            SinksOf(workflow, CbixWorkflowNodes.Triage));
+    }
+
+    [Fact]
+    public void Build_MakesEveryTerminalBranchTerminal()
+    {
+        // S01-13's invariant, re-pinned now that there are three terminals rather than two: a run emits
+        // exactly one outcome, whichever way it ended. This asserts the half a graph-shape test can -
+        // that no terminal has an outgoing edge - and the half it cannot, that each is designated an
+        // OUTPUT node, is asserted behaviourally instead: MAF 1.17.0 exposes no public reader for the
+        // output designation (Workflow surfaces Name, Description, StartExecutorId, ExecutorBindings
+        // and the Reflect* helpers, and nothing else), so the BDD lanes assert on the single
+        // WorkflowOutputEvent a real run emits, which is the property the designation exists to give.
+        Workflow workflow = BuildWorkflow();
+
+        foreach (string terminal in (string[])
+            [CbixWorkflowNodes.Persist, CbixWorkflowNodes.DuplicateTerminal, CbixWorkflowNodes.Review])
+        {
+            Assert.Empty(SinksOf(workflow, terminal));
+        }
     }
 
     [Fact]
@@ -194,6 +238,8 @@ public sealed class CbixWorkflowFactoryTests
     [InlineData(2)]
     [InlineData(3)]
     [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
     public void Constructor_RejectsAMissingNode(int missingNode)
     {
         DocumentIngestExecutor ingest = CreateIngestExecutor();
@@ -201,13 +247,20 @@ public sealed class CbixWorkflowFactoryTests
         SectionExtractionStubExecutor section = new();
         PersistStubExecutor persist = new(NullLogger<PersistStubExecutor>.Instance);
         DuplicateTerminalExecutor duplicate = new();
+        ReviewQueueStubExecutor review = new(
+            new InMemoryReviewQueue(),
+            TimeProvider.System,
+            NullLogger<ReviewQueueStubExecutor>.Instance);
+        TriageRoutingOptions routing = new();
 
         Assert.Throws<ArgumentNullException>(() => new CbixWorkflowFactory(
             missingNode == 0 ? null! : ingest,
             missingNode == 1 ? null! : triage,
             missingNode == 2 ? null! : section,
             missingNode == 3 ? null! : persist,
-            missingNode == 4 ? null! : duplicate));
+            missingNode == 4 ? null! : duplicate,
+            missingNode == 5 ? null! : review,
+            missingNode == 6 ? null! : routing));
     }
 
     /// <summary>
@@ -251,17 +304,38 @@ public sealed class CbixWorkflowFactoryTests
         return reached;
     }
 
-    /// <summary>Reports whether an executor type holds an <see cref="AIAgent"/> - i.e. can call a model.</summary>
+    /// <summary>Reports whether an executor type can reach a model - i.e. whether its node costs a call.</summary>
     /// <remarks>
+    /// <para>
     /// By field type rather than by name: an agent-holding executor must store the agent somewhere, and
     /// a naming convention would be satisfied by calling the field something else. This is the same
     /// question the stagger cares about - "does this node cost a model call" - asked of the type
     /// itself.
+    /// </para>
+    /// <para>
+    /// <b>Three types count, and the list grew with story S01-14 for a concrete reason rather than
+    /// speculatively.</b> An executor may hold a bare <see cref="AIAgent"/>, a
+    /// <see cref="BoundDocumentAgent"/>, or - as triage now does - an
+    /// <see cref="IDocumentBoundAgentFactory"/> that hands one out per document. S01-14 replaced
+    /// <c>TriageExecutor</c>'s <see cref="AIAgent"/> field with the factory, so the original
+    /// one-type test stopped recognising the only model-calling node in the graph and had to be
+    /// widened for the detector to keep answering the question it was written to answer.
+    /// </para>
+    /// <para>
+    /// <b>An earlier version of this note claimed the consequence would have been a vacuous pass; that
+    /// was backwards.</b> <see cref="Build_MakesTriageTheOnlyModelCallingNodeToday"/> compares against
+    /// a NON-EMPTY expected set, so a detector that recognised nothing would have failed loudly, not
+    /// silently - which is the arrangement working. What the widening bought is that it kept failing
+    /// for the right reason: the detector answers "does this node cost a model call", and a node that
+    /// reaches a model through a factory costs one exactly as much as one holding the agent directly.
+    /// </para>
     /// </remarks>
     private static bool HoldsAnAgent(Type executorType) =>
         Array.Exists(
             executorType.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public),
-            field => typeof(AIAgent).IsAssignableFrom(field.FieldType));
+            field => typeof(AIAgent).IsAssignableFrom(field.FieldType)
+                || typeof(BoundDocumentAgent).IsAssignableFrom(field.FieldType)
+                || typeof(IDocumentBoundAgentFactory).IsAssignableFrom(field.FieldType));
 
     private static Workflow BuildWorkflow() => CreateFactory().Build();
 
@@ -271,7 +345,12 @@ public sealed class CbixWorkflowFactoryTests
             CreateTriageExecutor(),
             new SectionExtractionStubExecutor(),
             new PersistStubExecutor(NullLogger<PersistStubExecutor>.Instance),
-            new DuplicateTerminalExecutor());
+            new DuplicateTerminalExecutor(),
+            new ReviewQueueStubExecutor(
+                new InMemoryReviewQueue(),
+                TimeProvider.System,
+                NullLogger<ReviewQueueStubExecutor>.Instance),
+            new TriageRoutingOptions());
 
     /// <summary>
     /// An ingest executor over a temporary root.
@@ -296,10 +375,19 @@ public sealed class CbixWorkflowFactoryTests
             NullLogger<DocumentIngestExecutor>.Instance);
     }
 
-    private static TriageExecutor CreateTriageExecutor() =>
-        new(
-            new ChatClientAgent(new UnusedChatClient(), name: CbixWorkflowNodes.Triage),
+    private static TriageExecutor CreateTriageExecutor()
+    {
+        DocumentIngestOptions options = new(
+            Path.Combine(Path.GetTempPath(), "cbix-graph-shape"),
+            DocumentIngestOptions.ClaudeFilesApiLimitBytes);
+
+        return new TriageExecutor(
+            new ChatContentDocumentAgentFactory(
+                new ChatClientAgent(new UnusedChatClient(), name: CbixWorkflowNodes.Triage)),
+            new TextOnlyDocumentContentProfile(
+                new PdfPigTextLayerExtractor(options, NullLogger<PdfPigTextLayerExtractor>.Instance)),
             NullLogger<TriageExecutor>.Instance);
+    }
 
     /// <summary>A chat client that refuses every call, because these tests build graphs and never run them.</summary>
     /// <remarks>

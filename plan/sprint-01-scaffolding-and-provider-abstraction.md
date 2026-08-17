@@ -352,7 +352,7 @@ Done means:
 
 ---
 
-### [ ] S01-14 — Triage agent returns a `DocumentProfile`
+### [x] S01-14 — Triage agent returns a `DocumentProfile`
 
 As the pipeline
 I want a Haiku-tier triage agent that profiles a document into type, jurisdiction, doc reference, version, layout family and confidence
@@ -380,7 +380,7 @@ Done means: `DocumentProfile` matches the record shape in design Appendix A exac
 
 ---
 
-### [ ] S01-15 — Triage routes low-confidence or unknown documents to review
+### [x] S01-15 — Triage routes low-confidence or unknown documents to review
 
 As the pipeline
 I want triage's conditional edge to route a document to the review queue instead of guessing when confidence is low or the document type is unrecognised
